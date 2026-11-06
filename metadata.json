@@ -1,0 +1,6 @@
+{
+  "name": "LocalDrop",
+  "description": "Local cross-platform file sharing alternative to LocalSend with real-time mDNS device discovery, transfer tracking, and Material 3 design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

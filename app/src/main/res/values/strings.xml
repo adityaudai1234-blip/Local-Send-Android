@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">LocalDrop</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_devices">Devices</string>
+    <string name="nav_transfers">Transfers</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="send_files_title">Send Files</string>
+    <string name="send_files_desc">Send files to nearby devices on your local network</string>
+    <string name="send_files_btn">Select Files</string>
+
+    <string name="receive_files_title">Receive Files</string>
+    <string name="receive_files_desc">Receive files from nearby devices without cloud servers</string>
+    <string name="receive_files_btn">Start Receiving</string>
+
+    <string name="nearby_devices_header">Nearby Devices</string>
+    <string name="transfers_summary_header">Transfers Summary</string>
+    <string name="scan_network">Scan Network</string>
+    <string name="scanning">Scanning…</string>
+    <string name="qr_pair_title">Quick QR Pairing</string>
+    <string name="qr_pair_desc">Pair quickly with desktop or mobile devices using a QR code (Coming in Phase 2)</string>
+    
+    <string name="no_devices_found">No devices found</string>
+    <string name="no_devices_hint">Make sure both devices are connected to the same Wi-Fi or local network.</string>
+</resources>
