@@ -2,9 +2,7 @@ package com.example.presentation.devices
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,14 +18,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,18 +39,23 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.network.ConnectionState
+import com.example.data.pairing.PairingPayload
 import com.example.domain.model.Device
+import com.example.domain.model.PairedDevice
 import com.example.presentation.components.DeviceCard
 import com.example.presentation.components.EmptyStateView
 import com.example.presentation.components.PulseScanningIndicator
 import com.example.presentation.components.StatusBadge
+import com.example.presentation.pairing.GenerateQrDialog
+import com.example.presentation.pairing.PairingConfirmationDialog
+import com.example.presentation.pairing.PairingProgressDialog
+import com.example.presentation.pairing.ScanQrDialog
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.IndigoAccent
-import com.example.ui.theme.StatusWarning
 
 @Composable
 fun DevicesScreen(
@@ -62,6 +68,15 @@ fun DevicesScreen(
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val error by viewModel.error.collectAsState()
 
+    val pairedDevices by viewModel.pairedDevices.collectAsState()
+    val connectionStates by viewModel.connectionStates.collectAsState()
+    val pairingResult by viewModel.pairingResult.collectAsState()
+
+    val showGenerateQr by viewModel.showGenerateQr.collectAsState()
+    val showScanQr by viewModel.showScanQr.collectAsState()
+    val pendingScannedPayload by viewModel.pendingScannedPayload.collectAsState()
+    val selectedDeviceForDetails by viewModel.selectedDeviceForDetails.collectAsState()
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -69,7 +84,7 @@ fun DevicesScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Top bar with scanning status and refresh button
+        // 1. Top Card: Quick Pairing Actions (Show QR / Scan QR)
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -79,32 +94,34 @@ fun DevicesScreen(
                 ),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(16.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        PulseScanningIndicator(isScanning = isScanning)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = if (isScanning) "Searching for peers…" else "Device Discovery Ready",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Service: _lsend._tcp (mDNS/DNS-SD)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PulseScanningIndicator(isScanning = isScanning)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isScanning) "Searching for local peers…" else "mDNS & TCP Server Active",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Port 53317 • _lsend._tcp",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                    }
 
-                    Row {
                         IconButton(
                             onClick = { viewModel.refreshDiscovery() },
                             modifier = Modifier.testTag("refresh_devices_button")
@@ -114,6 +131,46 @@ fun DevicesScreen(
                                 contentDescription = "Refresh Discovery",
                                 tint = MaterialTheme.colorScheme.primary
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // QR Pairing Buttons Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.openGenerateQr() },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("show_my_qr_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Show My QR", style = MaterialTheme.typography.labelMedium)
+                        }
+
+                        FilledTonalButton(
+                            onClick = { viewModel.openScanQr() },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("scan_qr_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Scan QR Code", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
@@ -154,82 +211,109 @@ fun DevicesScreen(
             }
         }
 
-        // QR Pairing Placeholder Card (Phase 2 Roadmap)
+        // SECTION 1: PAIRED DEVICES (Persisted in Room & Android Keystore)
         item {
-            Card(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("qr_pairing_card"),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                ),
-                border = BorderStroke(1.dp, IndigoAccent.copy(alpha = 0.35f))
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(IndigoAccent.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.VerifiedUser,
+                        contentDescription = null,
+                        tint = CyanAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Paired Devices (${pairedDevices.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                if (pairedDevices.isEmpty()) {
+                    OutlinedButton(
+                        onClick = { viewModel.addSamplePairedDevice() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.QrCode2,
-                            contentDescription = "QR Pairing",
-                            tint = IndigoAccent,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(14.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Quick QR Pairing",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            StatusBadge(
-                                text = "Phase 2",
-                                color = IndigoAccent,
-                                showDot = false
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Scan a QR code from desktop or phone to connect instantly across isolated subnets.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text("+ Sample Desktop", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
         }
 
-        // List Header with count and Test Peer action
+        if (pairedDevices.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No paired devices yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Scan a QR code from a Tauri desktop app or nearby device to establish a trusted bond.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            items(
+                items = pairedDevices,
+                key = { it.id }
+            ) { pairedDevice ->
+                val connState = connectionStates[pairedDevice.id] ?: ConnectionState.Disconnected
+                PairedDeviceCard(
+                    device = pairedDevice,
+                    connectionState = connState,
+                    onConnectClick = { viewModel.connectDevice(pairedDevice) },
+                    onDisconnectClick = { viewModel.disconnectDevice(pairedDevice.id) },
+                    onDetailsClick = { viewModel.openDeviceDetails(pairedDevice) },
+                    onRemoveClick = { viewModel.removePairedDevice(pairedDevice.id) }
+                )
+            }
+        }
+
+        // SECTION 2: NEARBY DEVICES (Discovered via mDNS)
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Discovered Devices (${devices.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Nearby Devices (${devices.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
 
                 OutlinedButton(
                     onClick = { viewModel.addTestPeers() },
@@ -247,13 +331,12 @@ fun DevicesScreen(
             }
         }
 
-        // Empty state or devices
         if (devices.isEmpty()) {
             item {
                 EmptyStateView(
                     icon = Icons.Default.WifiFind,
-                    title = "No devices found",
-                    description = "Make sure Tauri desktop or other LocalDrop devices are connected to '${connectionStatus.networkName}' and advertising on the network.",
+                    title = "No nearby devices found",
+                    description = "Make sure Tauri desktop or mobile peers are on '${connectionStatus.networkName}' and advertising.",
                     actionButtonText = "Scan Again",
                     onActionClick = { viewModel.refreshDiscovery() }
                 )
@@ -266,7 +349,21 @@ fun DevicesScreen(
                 DeviceCard(
                     device = device,
                     onClick = { onDeviceSelected(device) },
-                    onSendClick = { onDeviceSelected(device) }
+                    onSendClick = {
+                        // Create a pairing payload to initiate pairing with discovered peer
+                        val payload = PairingPayload(
+                            protocolVersion = "v1",
+                            sessionId = java.util.UUID.randomUUID().toString(),
+                            pairingToken = "mdns_peer_token",
+                            deviceId = device.id,
+                            deviceName = device.alias,
+                            platform = device.deviceType.identifier,
+                            ipAddress = device.ipAddress,
+                            port = device.port,
+                            expiresAt = System.currentTimeMillis() + 120_000L
+                        )
+                        viewModel.onPayloadScanned(payload)
+                    }
                 )
             }
         }
@@ -274,5 +371,50 @@ fun DevicesScreen(
         item {
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    // DIALOG 1: Generate QR Dialog
+    if (showGenerateQr) {
+        GenerateQrDialog(
+            pairingManager = viewModel.pairingManager,
+            onDismiss = { viewModel.closeGenerateQr() }
+        )
+    }
+
+    // DIALOG 2: Scan QR Dialog
+    if (showScanQr) {
+        ScanQrDialog(
+            onPayloadScanned = { payload ->
+                viewModel.onPayloadScanned(payload)
+            },
+            onDismiss = { viewModel.closeScanQr() }
+        )
+    }
+
+    // DIALOG 3: Pairing Confirmation Dialog
+    pendingScannedPayload?.let { payload ->
+        PairingConfirmationDialog(
+            payload = payload,
+            onConfirm = { viewModel.confirmPairing(payload) },
+            onCancel = { viewModel.dismissConfirmation() }
+        )
+    }
+
+    // DIALOG 4: Pairing Handshake Progress Dialog
+    PairingProgressDialog(
+        result = pairingResult,
+        onDismiss = { viewModel.resetPairingResult() }
+    )
+
+    // DIALOG 5: Device Details Dialog
+    selectedDeviceForDetails?.let { device ->
+        val connState = connectionStates[device.id] ?: ConnectionState.Disconnected
+        DeviceDetailsDialog(
+            device = device,
+            connectionState = connState,
+            connectionManager = viewModel.connectionManager,
+            onRemoveDevice = { viewModel.removePairedDevice(device.id) },
+            onDismiss = { viewModel.closeDeviceDetails() }
+        )
     }
 }

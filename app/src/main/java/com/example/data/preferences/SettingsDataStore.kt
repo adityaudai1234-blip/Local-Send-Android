@@ -19,6 +19,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class SettingsDataStore(private val context: Context) {
 
     private object PreferencesKeys {
+        val DEVICE_ID = stringPreferencesKey("device_id")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val AUTO_START_RECEIVING = booleanPreferencesKey("auto_start_receiving")
@@ -31,6 +32,25 @@ class SettingsDataStore(private val context: Context) {
         val manufacturer = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }
         val model = Build.MODEL
         if (model.startsWith(manufacturer, ignoreCase = true)) model else "$manufacturer $model"
+    }
+
+    val deviceIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[PreferencesKeys.DEVICE_ID] ?: ""
+    }
+
+    suspend fun getOrCreateDeviceId(): String {
+        var id = ""
+        context.dataStore.edit { prefs ->
+            val existing = prefs[PreferencesKeys.DEVICE_ID]
+            if (existing.isNullOrBlank()) {
+                val newId = "android-${java.util.UUID.randomUUID()}"
+                prefs[PreferencesKeys.DEVICE_ID] = newId
+                id = newId
+            } else {
+                id = existing
+            }
+        }
+        return id
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -48,7 +68,7 @@ class SettingsDataStore(private val context: Context) {
             downloadLocation = prefs[PreferencesKeys.DOWNLOAD_LOCATION] ?: "Downloads/LocalDrop",
             port = prefs[PreferencesKeys.PORT] ?: 53317,
             broadcastEnabled = prefs[PreferencesKeys.BROADCAST_ENABLED] ?: true,
-            appVersion = "1.0.0 (Phase 1)"
+            appVersion = "2.0.0 (Phase 2)"
         )
     }
 

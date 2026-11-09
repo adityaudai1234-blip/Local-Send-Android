@@ -1,0 +1,125 @@
+package com.example.data.network
+
+import android.util.Log
+import com.example.data.protocol.MessageFraming
+import com.example.data.protocol.ProtocolMessage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
+
+class TcpServer : NetworkServer {
+
+    companion object {
+        private const val TAG = "TcpServer"
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var serverJob: Job? = null
+    private var serverSocket: ServerSocket? = null
+
+    private val _isRunning = MutableStateFlow(false)
+    override val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+    private val _listeningPort = MutableStateFlow(53317)
+    override val listeningPort: StateFlow<Int> = _listeningPort.asStateFlow()
+
+    private var messageHandler: (suspend (ProtocolMessage, Socket) -> ProtocolMessage?)? = null
+
+    private val activeClientSockets = ConcurrentHashMap.newKeySet<Socket>()
+
+    override fun setMessageHandler(handler: suspend (ProtocolMessage, Socket) -> ProtocolMessage?) {
+        this.messageHandler = handler
+    }
+
+    override fun start(port: Int) {
+        if (_isRunning.value) return
+
+        serverJob = scope.launch {
+            try {
+                val server = ServerSocket(port).apply {
+                    reuseAddress = true
+                }
+                serverSocket = server
+                _listeningPort.value = server.localPort
+                _isRunning.value = true
+                Log.d(TAG, "TCP Server started on port ${server.localPort}")
+
+                while (isActive && !server.isClosed) {
+                    try {
+                        val clientSocket = server.accept()
+                        activeClientSockets.add(clientSocket)
+                        handleClient(clientSocket)
+                    } catch (e: Exception) {
+                        if (isActive && !server.isClosed) {
+                            Log.w(TAG, "Exception accepting socket: ${e.message}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed starting TCP Server on port $port", e)
+            } finally {
+                _isRunning.value = false
+            }
+        }
+    }
+
+    private fun handleClient(socket: Socket) {
+        scope.launch {
+            try {
+                socket.soTimeout = 30_000 // 30s timeout per message
+                val input = BufferedInputStream(socket.getInputStream())
+                val output = BufferedOutputStream(socket.getOutputStream())
+
+                while (isActive && !socket.isClosed && socket.isConnected) {
+                    val message = MessageFraming.readFrame(input) ?: break
+                    Log.d(TAG, "Received message type=${message.type} from ${socket.inetAddress.hostAddress}")
+
+                    val handler = messageHandler
+                    if (handler != null) {
+                        val response = handler.invoke(message, socket)
+                        if (response != null) {
+                            MessageFraming.writeFrame(output, response)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Client socket closed: ${e.message}")
+            } finally {
+                activeClientSockets.remove(socket)
+                try {
+                    socket.close()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    override fun stop() {
+        _isRunning.value = false
+        try {
+            serverSocket?.close()
+        } catch (_: Exception) {}
+        serverSocket = null
+
+        activeClientSockets.forEach { socket ->
+            try {
+                socket.close()
+            } catch (_: Exception) {}
+        }
+        activeClientSockets.clear()
+
+        serverJob?.cancel()
+        serverJob = null
+        Log.d(TAG, "TCP Server stopped")
+    }
+}

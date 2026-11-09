@@ -26,7 +26,8 @@ import java.util.UUID
 class HomeViewModel(
     private val discoveryRepository: DeviceDiscoveryRepository,
     private val transferRepository: TransferRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    val pairingManager: com.example.data.pairing.PairingManager
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
@@ -37,6 +38,17 @@ class HomeViewModel(
 
     private val _isReceivingActive = MutableStateFlow(true)
     val isReceivingActive: StateFlow<Boolean> = _isReceivingActive.asStateFlow()
+
+    private val _showGenerateQr = MutableStateFlow(false)
+    val showGenerateQr: StateFlow<Boolean> = _showGenerateQr.asStateFlow()
+
+    fun openGenerateQr() {
+        _showGenerateQr.value = true
+    }
+
+    fun closeGenerateQr() {
+        _showGenerateQr.value = false
+    }
 
     init {
         // Start advertising our device and discover nearby peers

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -99,6 +100,8 @@ fun HomeScreen(
         }
     }
 
+    val showGenerateQr by viewModel.showGenerateQr.collectAsState()
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -113,7 +116,8 @@ fun HomeScreen(
                 connectionName = connectionStatus.networkName,
                 isConnected = connectionStatus.isConnected,
                 isScanning = isScanning,
-                onRefresh = { viewModel.refreshDiscovery() }
+                onRefresh = { viewModel.refreshDiscovery() },
+                onPairClick = { viewModel.openGenerateQr() }
             )
         }
 
@@ -271,6 +275,13 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+
+    if (showGenerateQr) {
+        com.example.presentation.pairing.GenerateQrDialog(
+            pairingManager = viewModel.pairingManager,
+            onDismiss = { viewModel.closeGenerateQr() }
+        )
+    }
 }
 
 @Composable
@@ -279,7 +290,8 @@ private fun HomeHeaderSection(
     connectionName: String,
     isConnected: Boolean,
     isScanning: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onPairClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -338,15 +350,36 @@ private fun HomeHeaderSection(
                     }
                 }
 
-                IconButton(
-                    onClick = onRefresh,
-                    modifier = Modifier.testTag("refresh_home_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Refresh",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalButton(
+                        onClick = onPairClick,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("pair_device_home_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Pair", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    IconButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.testTag("refresh_home_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 

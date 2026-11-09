@@ -19,12 +19,16 @@ class ViewModelFactory(
                 HomeViewModel(
                     discoveryRepository = appContainer.deviceDiscoveryRepository,
                     transferRepository = appContainer.transferRepository,
-                    settingsRepository = appContainer.settingsRepository
+                    settingsRepository = appContainer.settingsRepository,
+                    pairingManager = appContainer.pairingManager
                 ) as T
             }
             modelClass.isAssignableFrom(DevicesViewModel::class.java) -> {
                 DevicesViewModel(
-                    discoveryRepository = appContainer.deviceDiscoveryRepository
+                    discoveryRepository = appContainer.deviceDiscoveryRepository,
+                    pairedDeviceRepository = appContainer.pairedDeviceRepository,
+                    connectionManager = appContainer.connectionManager,
+                    pairingManager = appContainer.pairingManager
                 ) as T
             }
             modelClass.isAssignableFrom(TransfersViewModel::class.java) -> {
