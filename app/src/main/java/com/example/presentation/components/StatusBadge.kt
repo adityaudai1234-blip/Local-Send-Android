@@ -67,3 +67,22 @@ fun TransferStatusBadge(status: TransferStatus, modifier: Modifier = Modifier) {
     }
     StatusBadge(text = label, color = color, modifier = modifier)
 }
+
+@Composable
+fun PlatformBadge(deviceType: com.example.domain.model.DeviceType, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = deviceType.icon,
+            contentDescription = deviceType.displayName,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+

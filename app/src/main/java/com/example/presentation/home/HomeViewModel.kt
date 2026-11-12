@@ -2,39 +2,48 @@ package com.example.presentation.home
 
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.pairing.PairingManager
+import com.example.data.transfer.IncomingTransferRequest
+import com.example.data.transfer.TransferManager
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ConnectionStatus
 import com.example.domain.model.Device
-import com.example.domain.model.TransferDirection
-import com.example.domain.model.TransferItem
+import com.example.domain.model.PairedDevice
 import com.example.domain.model.TransferStats
-import com.example.domain.model.TransferStatus
 import com.example.domain.repository.DeviceDiscoveryRepository
+import com.example.domain.repository.PairedDeviceRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.domain.repository.TransferRepository
+import com.example.presentation.transfer.SelectedFile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 class HomeViewModel(
     private val discoveryRepository: DeviceDiscoveryRepository,
     private val transferRepository: TransferRepository,
     private val settingsRepository: SettingsRepository,
-    val pairingManager: com.example.data.pairing.PairingManager
+    val pairingManager: PairingManager,
+    val transferManager: TransferManager,
+    val pairedDeviceRepository: PairedDeviceRepository
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
     val connectionStatus: StateFlow<ConnectionStatus> = discoveryRepository.connectionStatus
     val discoveredDevices: StateFlow<List<Device>> = discoveryRepository.discoveredDevices
+    val pairedDevices: StateFlow<List<PairedDevice>> = pairedDeviceRepository.pairedDevices
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList<PairedDevice>())
     val transferStats: StateFlow<TransferStats> = transferRepository.stats
     val isScanning: StateFlow<Boolean> = discoveryRepository.isScanning
+
+    // Incoming file transfer request from peer
+    val incomingRequest: StateFlow<IncomingTransferRequest?> = transferManager.incomingRequest
 
     private val _isReceivingActive = MutableStateFlow(true)
     val isReceivingActive: StateFlow<Boolean> = _isReceivingActive.asStateFlow()
@@ -42,13 +51,15 @@ class HomeViewModel(
     private val _showGenerateQr = MutableStateFlow(false)
     val showGenerateQr: StateFlow<Boolean> = _showGenerateQr.asStateFlow()
 
-    fun openGenerateQr() {
-        _showGenerateQr.value = true
-    }
+    // File selection & device dispatch workflow state
+    private val _selectedFiles = MutableStateFlow<List<SelectedFile>>(emptyList())
+    val selectedFiles: StateFlow<List<SelectedFile>> = _selectedFiles.asStateFlow()
 
-    fun closeGenerateQr() {
-        _showGenerateQr.value = false
-    }
+    private val _showFileSelectionDialog = MutableStateFlow(false)
+    val showFileSelectionDialog: StateFlow<Boolean> = _showFileSelectionDialog.asStateFlow()
+
+    private val _showDeviceSelectionDialog = MutableStateFlow(false)
+    val showDeviceSelectionDialog: StateFlow<Boolean> = _showDeviceSelectionDialog.asStateFlow()
 
     init {
         // Start advertising our device and discover nearby peers
@@ -60,6 +71,14 @@ class HomeViewModel(
             }
         }
         discoveryRepository.startDiscovery()
+    }
+
+    fun openGenerateQr() {
+        _showGenerateQr.value = true
+    }
+
+    fun closeGenerateQr() {
+        _showGenerateQr.value = false
     }
 
     fun toggleReceiving() {
@@ -76,43 +95,71 @@ class HomeViewModel(
         discoveryRepository.refreshDiscovery()
     }
 
-    fun handleSelectedFiles(uris: List<Uri>, context: Context, targetDevice: Device? = null) {
-        viewModelScope.launch {
-            for (uri in uris) {
-                var fileName = "file_${System.currentTimeMillis()}"
-                var fileSize = 1_024_000L
+    fun onFilesPicked(uris: List<Uri>, context: Context, preselectedTarget: Device? = null) {
+        val newFiles = uris.map { SelectedFile.fromUri(context, it) }
+        _selectedFiles.update { it + newFiles }
 
-                try {
-                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                        if (cursor.moveToFirst()) {
-                            if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: fileName
-                            if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex).coerceAtLeast(1024L)
-                        }
-                    }
-                } catch (_: Exception) {
-                    // Fallback to defaults
-                }
-
-                val peerName = targetDevice?.alias ?: discoveredDevices.value.firstOrNull()?.alias ?: "Nearby Device"
-                val peerAddress = targetDevice?.displaySubtitle ?: "mDNS Peer"
-
-                val item = TransferItem(
-                    id = UUID.randomUUID().toString(),
-                    fileName = fileName,
-                    fileSize = fileSize,
-                    direction = TransferDirection.SEND,
-                    status = TransferStatus.ACTIVE,
-                    progress = 0.05f,
-                    speed = "Connecting…",
-                    peerDeviceName = peerName,
-                    peerAddress = peerAddress,
-                    timestamp = System.currentTimeMillis()
-                )
-                transferRepository.addTransfer(item)
-            }
+        if (preselectedTarget != null) {
+            // Target is already chosen, send directly
+            transferManager.sendFiles(_selectedFiles.value, listOf(preselectedTarget))
+            _selectedFiles.value = emptyList()
+            _showFileSelectionDialog.value = false
+            _showDeviceSelectionDialog.value = false
+        } else {
+            _showFileSelectionDialog.value = true
         }
+    }
+
+    fun addMoreFiles(newFiles: List<SelectedFile>) {
+        _selectedFiles.update { it + newFiles }
+    }
+
+    fun removeSelectedFile(file: SelectedFile) {
+        _selectedFiles.update { list -> list.filter { it.uri != file.uri } }
+        if (_selectedFiles.value.isEmpty()) {
+            _showFileSelectionDialog.value = false
+        }
+    }
+
+    fun clearSelectedFiles() {
+        _selectedFiles.value = emptyList()
+        _showFileSelectionDialog.value = false
+    }
+
+    fun proceedToDeviceSelection() {
+        _showFileSelectionDialog.value = false
+        _showDeviceSelectionDialog.value = true
+    }
+
+    fun backToFileSelection() {
+        _showDeviceSelectionDialog.value = false
+        _showFileSelectionDialog.value = true
+    }
+
+    fun dismissFileFlow() {
+        _selectedFiles.value = emptyList()
+        _showFileSelectionDialog.value = false
+        _showDeviceSelectionDialog.value = false
+    }
+
+    fun sendSelectedFilesToTargets(targets: List<Device>) {
+        val filesToSend = _selectedFiles.value
+        if (filesToSend.isNotEmpty() && targets.isNotEmpty()) {
+            transferManager.sendFiles(filesToSend, targets)
+        }
+        dismissFileFlow()
+    }
+
+    fun acceptIncomingTransfer(request: IncomingTransferRequest) {
+        transferManager.acceptIncomingTransfer(request)
+    }
+
+    fun rejectIncomingTransfer(request: IncomingTransferRequest) {
+        transferManager.rejectIncomingTransfer(request)
+    }
+
+    fun handleSelectedFiles(uris: List<Uri>, context: Context, targetDevice: Device? = null) {
+        onFilesPicked(uris, context, targetDevice)
     }
 
     fun addTestPeer() {

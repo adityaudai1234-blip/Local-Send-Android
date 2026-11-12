@@ -310,7 +310,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Phase 1: Project Foundation, UI & Device Discovery\nBuilt with Kotlin, Jetpack Compose, Material 3, Android NSD/mDNS, and DataStore.",
+                        text = "LocalDrop - Cross-Platform Local Share\nPhase 1: Foundation & Discovery (mDNS)\nPhase 2: QR Pairing & Cryptographic Handshake\nPhase 3: Binary Chunked TCP Streaming, SHA-256 Verification & SAF Management",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

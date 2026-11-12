@@ -1,21 +1,23 @@
-# LocalDrop Shared Communication Protocol (v1)
-### Cross-Platform Protocol Specification for Android & Tauri (Desktop)
+# LocalDrop Shared Communication Protocol (v1 & v2 Extension)
+### Cross-Platform Protocol Specification for Android & Tauri Desktop (Windows, macOS, Linux)
 
-This specification defines the network framing, message formats, pairing handshake, and authentication flow for peer-to-peer communication between Android and Tauri desktop applications (Windows, macOS, Linux).
+This specification defines the network framing, message formats, pairing handshake, authentication flow, and binary chunked streaming file transfer protocol for peer-to-peer communication between Android and Tauri desktop applications.
 
 ---
 
 ## 1. Network Transport & Framing
 
-* **Transport**: Direct TCP socket connections.
+* **Transport**: Direct peer-to-peer TCP socket connections over local network / Wi-Fi.
 * **Default Port**: `53317` (configurable).
-* **Length-Prefixed Framing**:
-  * Every message sent over a TCP stream is preceded by a **4-byte Big-Endian signed 32-bit integer** representing the length $L$ of the payload in bytes.
-  * The next $L$ bytes contain the UTF-8 encoded JSON payload.
-  * Maximum frame size: `2,097,152` bytes (2 MB).
-  * Sockets must read until the full $L$ bytes are received before parsing JSON (handling TCP fragmentation).
+* **Control Channel (Length-Prefixed JSON)**:
+  * Control messages are preceded by a **4-byte Big-Endian signed 32-bit integer** representing the payload byte length $L$.
+  * The next $L$ bytes contain UTF-8 encoded JSON.
+  * Maximum control frame size: `2,097,152` bytes (2 MB).
+* **Payload Channel (Binary Chunk Streaming)**:
+  * Raw file contents are streamed in binary frames (default 64 KB chunks) with magic byte headers to avoid memory buffering and support large gigabyte files.
 
 ```
+Length-Prefixed Control Frame:
 +-----------------------------------+------------------------------------------+
 | 4-byte Int (Payload Length L)     | L bytes of UTF-8 JSON Payload            |
 +-----------------------------------+------------------------------------------+
@@ -30,7 +32,7 @@ All control messages share this JSON structure:
 ```json
 {
   "version": "v1",
-  "type": "PAIRING_REQUEST",
+  "type": "TRANSFER_REQUEST",
   "messageId": "550e8400-e29b-41d4-a716-446655440000",
   "senderId": "android-node-uuid",
   "receiverId": "tauri-desktop-uuid",
@@ -41,116 +43,213 @@ All control messages share this JSON structure:
 }
 ```
 
-### Fields:
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `version` | String | Yes | Protocol version. Must be `"v1"`. |
-| `type` | String | Yes | Message type identifier (see Message Types). |
-| `messageId` | String | Yes | Unique UUID for request tracking / deduplication. |
-| `senderId` | String | Yes | Unique identifier of sending device. |
-| `receiverId` | String | No | Target device identifier. |
-| `timestamp` | Long | Yes | Unix timestamp in milliseconds. |
-| `payload` | Object | Yes | Map of key-value parameters. |
-
 ---
 
 ## 3. Message Types
 
-### 3.1 `PAIRING_REQUEST`
-Initiated by the scanning device after reading the target's QR code.
-* **Payload Fields**:
-  * `sessionId` (String, Required): Matches the QR code session UUID.
-  * `token` (String, Required): Temporary 16-32 byte token from QR code.
-  * `deviceName` (String, Required): Friendly alias of the scanning device.
-  * `platform` (String, Required): `"android"` | `"windows"` | `"macos"` | `"linux"`.
-  * `ipAddress` (String, Required): Scanning device IPv4 address.
-  * `port` (Int, Required): Listening TCP port of scanning device.
-  * `model` (String, Optional): Hardware/OS description (e.g. `"Pixel 8"`, `"Windows 11"`).
+### 3.1 Pairing & Auth Messages (Phase 2)
+* `PAIRING_REQUEST`: Sent with temporary QR token and session ID.
+* `PAIRING_ACCEPTED`: Returns mutual permanent authentication token.
+* `PAIRING_REJECTED`: Returns rejection reason if token/session invalid or expired.
+* `AUTHENTICATION_REQUEST`: Proves identity using stored mutual token.
+* `AUTHENTICATION_RESPONSE`: Acknowledges successful authentication.
+* `HEARTBEAT`: Ping/pong keepalive packet.
+* `ERROR`: Returns error code and description.
 
-### 3.2 `PAIRING_ACCEPTED`
-Returned by the displaying device when the session and token match and have not expired.
-* **Payload Fields**:
-  * `authToken` (String, Required): Secure permanent mutual authentication token.
-  * `deviceName` (String, Required): Friendly alias of the displaying device.
-  * `platform` (String, Required): Platform of displaying device.
-  * `model` (String, Optional): Hardware/OS description.
-
-### 3.3 `PAIRING_REJECTED`
-Returned when the session ID or token does not match, or the QR code has expired.
-* **Payload Fields**:
-  * `reason` (String, Required): Human-readable rejection reason.
-
-### 3.4 `AUTHENTICATION_REQUEST`
-Sent by a paired device when establishing a new connection session.
-* **Payload Fields**:
-  * `token` (String, Required): Previously established mutual auth token.
-  * `timestamp` (Long, Required): Request timestamp.
-
-### 3.5 `AUTHENTICATION_RESPONSE`
-Returned upon successful token verification.
-* **Payload Fields**:
-  * `status` (String, Required): `"authenticated"`.
-
-### 3.6 `HEARTBEAT`
-Sent periodically (every 15–20s) to maintain socket health.
-* **Payload**: `{"ping": 1731000000000}` or `{"pong": 1731000000000}`.
-
-### 3.7 `CONNECTION_CLOSED`
-Sent prior to voluntary graceful socket closure.
-
-### 3.8 `ERROR`
-Returned on protocol, parsing, or transport failures.
-* **Payload Fields**:
-  * `code` (String): e.g. `"AUTH_FAILED"`, `"MALFORMED_FRAME"`, `"TIMEOUT"`.
-  * `message` (String): Human-readable error description.
+### 3.2 File Transfer Messages (Phase 3)
+* `TRANSFER_REQUEST`: Sender initiates session with list of files and total size.
+* `TRANSFER_ACCEPTED`: Receiver approves the transfer session.
+* `TRANSFER_REJECTED`: Receiver declines (user declined or insufficient disk space).
+* `TRANSFER_STARTED`: Sender announces start of a specific file stream on socket.
+* `TRANSFER_PROGRESS`: Optional progress notification.
+* `TRANSFER_PAUSED`: Notifies peer that transfer was paused.
+* `TRANSFER_RESUMED`: Notifies peer that transfer was resumed.
+* `TRANSFER_CANCELLED`: Informs peer that transfer was aborted.
+* `TRANSFER_COMPLETED`: Handshake acknowledging successful transfer.
 
 ---
 
-## 4. QR Code Pairing Specification
+## 4. File Transfer Workflow
 
-The QR code encodes a single compact JSON string with 120-second validity:
-
-```json
-{
-  "protocolVersion": "v1",
-  "sessionId": "b4cfc134-ff4c-47b2-8c11-137b2586b6a0",
-  "pairingToken": "X9k2Pq8...32chars",
-  "deviceId": "node-android-1234",
-  "deviceName": "Alice's Phone",
-  "platform": "android",
-  "ipAddress": "192.168.1.50",
-  "port": 53317,
-  "expiresAt": 1731000120000
-}
+```
+Sender (Android or Tauri)                          Receiver (Android or Tauri)
+      |                                                        |
+      | 1. TRANSFER_REQUEST (sessionId, file list, totalSize)  |
+      |------------------------------------------------------->|
+      |                                                        | [Prompt user or auto-accept]
+      | 2. TRANSFER_ACCEPTED (sessionId, accepted: true)       |
+      |<-------------------------------------------------------|
+      |                                                        |
+      | 3. Connect dedicated streaming socket                  |
+      |=======================================================>|
+      |                                                        |
+      | 4. TRANSFER_STARTED (fileId, fileName, fileSize)       |
+      |------------------------------------------------------->|
+      |                                                        | [Create temp file: .tmp_{fileId}]
+      | 5. Binary Chunk Frames (CHUNK_MAGIC, offset, data...)   |
+      |------------------------------------------------------->| [Write chunk, update SHA-256]
+      | 5. Binary Chunk Frames ...                             |
+      |------------------------------------------------------->|
+      |                                                        |
+      | 6. Binary EOF Frame (EOF_MAGIC, SHA-256 checksum)      |
+      |------------------------------------------------------->| [Verify SHA-256]
+      |                                                        | [Rename temp to destination]
+      | 7. Socket close or next file                           |
+      |------------------------------------------------------->|
 ```
 
 ---
 
-## 5. Tauri (Rust) Reference Implementation
+## 5. Binary Chunk Framing Specification
 
-In Tauri (Rust), TCP socket framing can be implemented cleanly with `tokio`:
+To stream files with zero memory exhaustion and high throughput, data bytes are streamed in structured frames:
+
+### 5.1 Data Chunk Frame Format
+Magic: `0x4C534431` (ASCII `"LSD1"` = LocalSend Data v1)
+
+| Field | Type | Size | Description |
+|---|---|---|---|
+| Magic Header | UInt32 BE | 4 bytes | `0x4C534431` (`"LSD1"`) |
+| File Index | UInt32 BE | 4 bytes | Index of the file within the session (0-based) |
+| Chunk Offset | UInt64 BE | 8 bytes | Byte offset within the file |
+| Chunk Length $N$ | UInt32 BE | 4 bytes | Byte count of payload (e.g. 65536) |
+| Payload Data | Bytes | $N$ bytes | Raw file bytes |
+
+Total frame overhead: 20 bytes per chunk.
+
+### 5.2 EOF Frame Format
+Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
+
+| Field | Type | Size | Description |
+|---|---|---|---|
+| Magic Header | UInt32 BE | 4 bytes | `0x4C53454F` (`"LSEO"`) |
+| File Index | UInt32 BE | 4 bytes | Index of the file within the session (0-based) |
+| SHA-256 Digest | Bytes | 32 bytes | SHA-256 binary digest of the entire file |
+
+Total EOF frame size: 40 bytes.
+
+---
+
+## 6. Security & Integrity Guarantees
+
+1. **Path Traversal Sanitization**:
+   Receiving peers MUST sanitize all incoming filenames before creating files on disk:
+   * Strip any directory path components (`/`, `\`, `..`, `:`, etc.).
+   * Retain only the base name and extension.
+   * If a file with the same name exists, rename safely to `filename (1).ext`.
+2. **Atomic Writes via Temporary Buffers**:
+   Files MUST be written to `.tmp_{fileId}` during transfer. The temporary file is only finalized and moved to `Downloads/LocalDrop` once the EOF frame is received and verified.
+3. **SHA-256 Cryptographic Verification**:
+   The receiver verifies the computed SHA-256 hash against the EOF frame. If a mismatch is detected, the temporary file is immediately discarded.
+
+---
+
+## 7. Tauri Desktop (Rust) Reference Implementation
+
+Below is the complete Rust reference implementation for sending and receiving files with LocalDrop in a Tauri application:
 
 ```rust
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use sha2::{Digest, Sha256};
 
-pub async fn write_frame<W: AsyncWriteExt + Unpin>(writer: &mut W, json_str: &str) -> std::io::Result<()> {
-    let bytes = json_str.as_bytes();
-    let len = bytes.len() as u32;
-    writer.write_all(&len.to_be_bytes()).await?;
-    writer.write_all(bytes).await?;
+pub const CHUNK_MAGIC: u32 = 0x4C534431; // "LSD1"
+pub const EOF_MAGIC: u32   = 0x4C53454F; // "LSEO"
+pub const DEFAULT_CHUNK_SIZE: usize = 65536; // 64 KB
+
+/// Streams a file from disk to an open TCP socket using chunked framing
+pub async fn stream_file_to_socket<W: AsyncWriteExt + Unpin>(
+    writer: &mut W,
+    file_path: &Path,
+    file_index: u32,
+    progress_callback: impl Fn(u64, u64),
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let mut file = tokio::fs::File::open(file_path).await?;
+    let metadata = file.metadata().await?;
+    let file_size = metadata.len();
+
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; DEFAULT_CHUNK_SIZE];
+    let mut offset: u64 = 0;
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+
+        // Write Chunk Header: [MAGIC(4)][INDEX(4)][OFFSET(8)][LEN(4)]
+        writer.write_u32(CHUNK_MAGIC).await?;
+        writer.write_u32(file_index).await?;
+        writer.write_u64(offset).await?;
+        writer.write_u32(bytes_read as u32).await?;
+        writer.write_all(&buffer[..bytes_read]).await?;
+
+        offset += bytes_read as u64;
+        progress_callback(offset, file_size);
+    }
+
+    // Write EOF Frame: [EOF_MAGIC(4)][INDEX(4)][SHA256(32)]
+    let sha256_result: [u8; 32] = hasher.finalize().into();
+    writer.write_u32(EOF_MAGIC).await?;
+    writer.write_u32(file_index).await?;
+    writer.write_all(&sha256_result).await?;
     writer.flush().await?;
-    Ok(())
+
+    Ok(sha256_result)
 }
 
-pub async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> std::io::Result<String> {
-    let mut len_buf = [0u8; 4];
-    reader.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-    if len > 2 * 1024 * 1024 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Frame too large"));
+/// Receives a chunked file stream from a TCP socket and verifies integrity
+pub async fn receive_file_from_socket<R: AsyncReadExt + Unpin>(
+    reader: &mut R,
+    destination_path: &Path,
+    expected_file_size: u64,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let temp_path = destination_path.with_extension("tmp");
+    let mut temp_file = tokio::fs::File::create(&temp_path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; DEFAULT_CHUNK_SIZE];
+
+    loop {
+        let magic = reader.read_u32().await?;
+        match magic {
+            CHUNK_MAGIC => {
+                let _file_index = reader.read_u32().await?;
+                let _offset = reader.read_u64().await?;
+                let chunk_len = reader.read_u32().await? as usize;
+
+                if chunk_len > DEFAULT_CHUNK_SIZE * 2 {
+                    return Err("Chunk size exceeds buffer limit".into());
+                }
+
+                reader.read_exact(&mut buffer[..chunk_len]).await?;
+                temp_file.write_all(&buffer[..chunk_len]).await?;
+                hasher.update(&buffer[..chunk_len]);
+            }
+            EOF_MAGIC => {
+                let _file_index = reader.read_u32().await?;
+                let mut expected_hash = [0u8; 32];
+                reader.read_exact(&mut expected_hash).await?;
+
+                let computed_hash: [u8; 32] = hasher.finalize().into();
+                if computed_hash != expected_hash {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return Err("Checksum mismatch: file corrupted in transit".into());
+                }
+
+                temp_file.flush().await?;
+                drop(temp_file);
+
+                tokio::fs::rename(&temp_path, destination_path).await?;
+                return Ok(destination_path.to_path_buf());
+            }
+            _ => {
+                return Err(format!("Unknown framing magic: 0x{:08X}", magic).into());
+            }
+        }
     }
-    let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload).await?;
-    String::from_utf8(payload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 ```

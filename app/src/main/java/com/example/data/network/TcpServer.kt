@@ -35,11 +35,16 @@ class TcpServer : NetworkServer {
     override val listeningPort: StateFlow<Int> = _listeningPort.asStateFlow()
 
     private var messageHandler: (suspend (ProtocolMessage, Socket) -> ProtocolMessage?)? = null
+    private var streamMessageHandler: (suspend (ProtocolMessage, Socket, BufferedInputStream) -> ProtocolMessage?)? = null
 
     private val activeClientSockets = ConcurrentHashMap.newKeySet<Socket>()
 
     override fun setMessageHandler(handler: suspend (ProtocolMessage, Socket) -> ProtocolMessage?) {
         this.messageHandler = handler
+    }
+
+    override fun setStreamMessageHandler(handler: suspend (ProtocolMessage, Socket, BufferedInputStream) -> ProtocolMessage?) {
+        this.streamMessageHandler = handler
     }
 
     override fun start(port: Int) {
@@ -85,11 +90,19 @@ class TcpServer : NetworkServer {
                     val message = MessageFraming.readFrame(input) ?: break
                     Log.d(TAG, "Received message type=${message.type} from ${socket.inetAddress.hostAddress}")
 
-                    val handler = messageHandler
-                    if (handler != null) {
-                        val response = handler.invoke(message, socket)
+                    val sHandler = streamMessageHandler
+                    if (sHandler != null) {
+                        val response = sHandler.invoke(message, socket, input)
                         if (response != null) {
                             MessageFraming.writeFrame(output, response)
+                        }
+                    } else {
+                        val handler = messageHandler
+                        if (handler != null) {
+                            val response = handler.invoke(message, socket)
+                            if (response != null) {
+                                MessageFraming.writeFrame(output, response)
+                            }
                         }
                     }
                 }

@@ -1,154 +1,118 @@
 package com.example.data.repository
 
+import com.example.data.db.TransferDao
+import com.example.data.db.TransferEntity
+import com.example.data.transfer.TransferManager
 import com.example.domain.model.TransferCategory
 import com.example.domain.model.TransferDirection
 import com.example.domain.model.TransferItem
-import com.example.domain.model.TransferStatus
 import com.example.domain.model.TransferStats
+import com.example.domain.model.TransferStatus
 import com.example.domain.repository.TransferRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.util.UUID
 
-class TransferRepositoryImpl : TransferRepository {
+class TransferRepositoryImpl(
+    private val transferManager: TransferManager,
+    private val transferDao: TransferDao
+) : TransferRepository {
 
-    private val _transfers = MutableStateFlow<List<TransferItem>>(emptyList())
-    override val transfers: StateFlow<List<TransferItem>> = _transfers.asStateFlow()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _stats = MutableStateFlow(TransferStats())
-    override val stats: StateFlow<TransferStats> = _stats.asStateFlow()
+    // Merges live active transfers with persistent transfer history from Room
+    override val transfers: StateFlow<List<TransferItem>> = combine(
+        transferManager.activeTransfers,
+        transferManager.transferHistory
+    ) { activeList, historyList ->
+        val activeIds = activeList.map { it.id }.toSet()
+        val filteredHistory = historyList.filter { it.id !in activeIds }
+        (activeList + filteredHistory).sortedByDescending { it.timestamp }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    init {
-        populateSampleTransfers()
-    }
+    override val stats: StateFlow<TransferStats> = transferManager.stats
 
     override fun getTransfersByCategory(category: TransferCategory): List<TransferItem> {
-        return _transfers.value.filter { it.category == category }
+        return transfers.value.filter { it.category == category }
     }
 
     override fun addTransfer(item: TransferItem) {
-        _transfers.update { listOf(item) + it }
-        recalculateStats()
+        scope.launch {
+            transferDao.insert(
+                TransferEntity(
+                    id = item.id,
+                    sessionId = UUID.randomUUID().toString(),
+                    fileName = item.fileName,
+                    fileSize = item.fileSize,
+                    direction = item.direction.name,
+                    status = item.status.name,
+                    peerDeviceName = item.peerDeviceName,
+                    peerAddress = item.peerAddress,
+                    filePath = item.filePath,
+                    mimeType = item.mimeType,
+                    timestamp = item.timestamp,
+                    speed = item.speed
+                )
+            )
+        }
     }
 
     override fun cancelTransfer(id: String) {
-        _transfers.update { list ->
-            list.map { item ->
-                if (item.id == id && (item.status == TransferStatus.ACTIVE || item.status == TransferStatus.PENDING)) {
-                    item.copy(status = TransferStatus.CANCELLED, errorMessage = "Cancelled by user")
-                } else item
-            }
-        }
-        recalculateStats()
+        transferManager.cancelTransfer(id)
     }
 
     override fun retryTransfer(id: String) {
-        _transfers.update { list ->
-            list.map { item ->
-                if (item.id == id && (item.status == TransferStatus.FAILED || item.status == TransferStatus.CANCELLED)) {
-                    item.copy(status = TransferStatus.ACTIVE, progress = 0.15f, speed = "8.4 MB/s", errorMessage = null)
-                } else item
-            }
-        }
-        recalculateStats()
+        // Resume if paused/failed, or reset state
+        transferManager.resumeTransfer(id)
     }
 
     override fun clearCompleted() {
-        _transfers.update { list ->
-            list.filter { it.status != TransferStatus.COMPLETED }
-        }
-        recalculateStats()
+        transferManager.clearCompleted()
     }
 
     override fun clearAll() {
-        _transfers.value = emptyList()
-        recalculateStats()
+        scope.launch {
+            transferDao.deleteAll()
+        }
     }
 
     override fun populateSampleTransfers() {
         val now = System.currentTimeMillis()
-        val sampleItems = listOf(
-            TransferItem(
+        val samples = listOf(
+            TransferEntity(
                 id = UUID.randomUUID().toString(),
+                sessionId = UUID.randomUUID().toString(),
                 fileName = "project_design_presentation.pdf",
                 fileSize = 24_680_000L,
-                direction = TransferDirection.SEND,
-                status = TransferStatus.ACTIVE,
-                progress = 0.68f,
-                speed = "14.2 MB/s",
+                direction = TransferDirection.SEND.name,
+                status = TransferStatus.COMPLETED.name,
                 peerDeviceName = "MacBook Pro M3",
                 peerAddress = "192.168.1.189:53317",
-                timestamp = now - 15_000L
+                timestamp = now - 15_000L,
+                speed = "Done (14.2 MB/s)"
             ),
-            TransferItem(
+            TransferEntity(
                 id = UUID.randomUUID().toString(),
+                sessionId = UUID.randomUUID().toString(),
                 fileName = "tauri_build_v2.0_windows.zip",
                 fileSize = 142_500_000L,
-                direction = TransferDirection.RECEIVE,
-                status = TransferStatus.ACTIVE,
-                progress = 0.42f,
-                speed = "28.5 MB/s",
+                direction = TransferDirection.RECEIVE.name,
+                status = TransferStatus.COMPLETED.name,
                 peerDeviceName = "Tauri Studio PC",
                 peerAddress = "192.168.1.142:53317",
-                timestamp = now - 35_000L
-            ),
-            TransferItem(
-                id = UUID.randomUUID().toString(),
-                fileName = "vacation_photos_4k.tar.gz",
-                fileSize = 512_000_000L,
-                direction = TransferDirection.RECEIVE,
-                status = TransferStatus.COMPLETED,
-                progress = 1.0f,
-                speed = "Done (31.2 MB/s)",
-                peerDeviceName = "Ubuntu Devbox",
-                peerAddress = "192.168.1.105:53317",
-                timestamp = now - 3_600_000L
-            ),
-            TransferItem(
-                id = UUID.randomUUID().toString(),
-                fileName = "device_keys_backup.json",
-                fileSize = 48_500L,
-                direction = TransferDirection.SEND,
-                status = TransferStatus.COMPLETED,
-                progress = 1.0f,
-                speed = "Done",
-                peerDeviceName = "MacBook Pro M3",
-                peerAddress = "192.168.1.189:53317",
-                timestamp = now - 7_200_000L
-            ),
-            TransferItem(
-                id = UUID.randomUUID().toString(),
-                fileName = "raw_camera_footage.mp4",
-                fileSize = 1_820_000_000L,
-                direction = TransferDirection.SEND,
-                status = TransferStatus.FAILED,
-                progress = 0.88f,
-                speed = "Interrupted",
-                peerDeviceName = "Living Room TV",
-                peerAddress = "192.168.1.200:53317",
-                timestamp = now - 14_400_000L,
-                errorMessage = "Connection closed by peer (timeout)"
+                timestamp = now - 120_000L,
+                speed = "Done (28.5 MB/s)"
             )
         )
-        _transfers.value = sampleItems
-        recalculateStats()
-    }
-
-    private fun recalculateStats() {
-        val current = _transfers.value
-        val active = current.count { it.status == TransferStatus.ACTIVE || it.status == TransferStatus.PENDING }
-        val completed = current.count { it.status == TransferStatus.COMPLETED }
-        val failed = current.count { it.status == TransferStatus.FAILED || it.status == TransferStatus.CANCELLED }
-        val totalBytes = current.filter { it.status == TransferStatus.COMPLETED }.sumOf { it.fileSize }
-
-        _stats.value = TransferStats(
-            activeCount = active,
-            completedCount = completed,
-            failedCount = failed,
-            totalFilesTransferred = completed,
-            totalBytesTransferred = totalBytes
-        )
+        scope.launch {
+            samples.forEach { transferDao.insert(it) }
+        }
     }
 }

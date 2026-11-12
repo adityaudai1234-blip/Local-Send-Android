@@ -42,7 +42,9 @@ data class TransferItem(
     val peerDeviceName: String,
     val peerAddress: String = "",
     val timestamp: Long = System.currentTimeMillis(),
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val filePath: String? = null,
+    val mimeType: String? = null
 ) {
     val category: TransferCategory
         get() = when (status) {

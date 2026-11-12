@@ -15,6 +15,9 @@ import com.example.data.repository.PairedDeviceRepositoryImpl
 import com.example.data.repository.SettingsRepositoryImpl
 import com.example.data.repository.TransferRepositoryImpl
 import com.example.data.security.SecurityKeyStore
+import com.example.data.transfer.StorageManager
+import com.example.data.transfer.TransferManager
+import com.example.data.transfer.TransferNotificationHelper
 import com.example.domain.repository.DeviceDiscoveryRepository
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.domain.repository.SettingsRepository
@@ -35,6 +38,9 @@ interface AppContainer {
     val tcpClient: NetworkClient
     val connectionManager: ConnectionManager
     val pairingManager: PairingManager
+    val storageManager: StorageManager
+    val transferNotificationHelper: TransferNotificationHelper
+    val transferManager: TransferManager
 }
 
 class DefaultAppContainer(private val context: Context) : AppContainer {
@@ -53,10 +59,6 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
 
     override val deviceDiscoveryRepository: DeviceDiscoveryRepository by lazy {
         DeviceDiscoveryRepositoryImpl(context, nsdDiscoveryManager)
-    }
-
-    override val transferRepository: TransferRepository by lazy {
-        TransferRepositoryImpl()
     }
 
     override val securityKeyStore: SecurityKeyStore by lazy {
@@ -94,6 +96,33 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
         )
     }
 
+    override val storageManager: StorageManager by lazy {
+        StorageManager(context)
+    }
+
+    override val transferNotificationHelper: TransferNotificationHelper by lazy {
+        TransferNotificationHelper(context)
+    }
+
+    override val transferManager: TransferManager by lazy {
+        TransferManager(
+            context = context,
+            server = tcpServer,
+            client = tcpClient,
+            storageManager = storageManager,
+            transferDao = appDatabase.transferDao(),
+            pairedDeviceRepository = pairedDeviceRepository,
+            settingsRepository = settingsRepository,
+            connectionManager = connectionManager,
+            notificationHelper = transferNotificationHelper,
+            myDeviceIdProvider = { deviceId }
+        )
+    }
+
+    override val transferRepository: TransferRepository by lazy {
+        TransferRepositoryImpl(transferManager, appDatabase.transferDao())
+    }
+
     override val pairingManager: PairingManager by lazy {
         PairingManager(
             server = tcpServer,
@@ -104,5 +133,19 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             myDeviceId = deviceId,
             settingsProvider = { settingsRepository.settings.value }
         )
+    }
+
+    init {
+        // Configure unified TCP server stream message routing
+        tcpServer.setStreamMessageHandler { message, socket, input ->
+            // Try transfer manager first (for transfer requests, streaming chunks, cancellations)
+            val transferResponse = transferManager.handleProtocolMessage(message, socket, input)
+            if (transferResponse != null) {
+                transferResponse
+            } else {
+                // Otherwise let pairing manager handle pairing / auth / heartbeat
+                pairingManager.handleIncomingMessage(message)
+            }
+        }
     }
 }

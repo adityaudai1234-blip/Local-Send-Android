@@ -3,6 +3,7 @@ package com.example.presentation.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +19,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -46,7 +51,11 @@ fun TransferItemCard(
     item: TransferItem,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    onOpenFile: (() -> Unit)? = null,
+    onShareFile: (() -> Unit)? = null,
+    onPauseResume: (() -> Unit)? = null
 ) {
     val animatedProgress by animateFloatAsState(
         targetValue = item.progress,
@@ -56,7 +65,9 @@ fun TransferItemCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .testTag("transfer_item_${item.id}"),
+            .testTag("transfer_item_${item.id}")
+            .clip(RoundedCornerShape(16.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -146,11 +157,58 @@ fun TransferItemCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TransferStatusBadge(status = item.status)
 
-                    if (item.status == TransferStatus.ACTIVE || item.status == TransferStatus.PENDING) {
+                    // Open / Share actions for completed files
+                    if (item.status == TransferStatus.COMPLETED && !item.filePath.isNullOrBlank()) {
+                        if (onOpenFile != null) {
+                            IconButton(
+                                onClick = onOpenFile,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("open_file_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = "Open file",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        if (onShareFile != null) {
+                            IconButton(
+                                onClick = onShareFile,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("share_file_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = "Share file",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    } else if (item.status == TransferStatus.ACTIVE || item.status == TransferStatus.PENDING) {
+                        if (onPauseResume != null && item.status == TransferStatus.ACTIVE) {
+                            IconButton(
+                                onClick = onPauseResume,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("pause_transfer_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = if (item.speed.contains("Pause", ignoreCase = true)) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                    contentDescription = "Pause or Resume Transfer",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = onCancel,
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .testTag("cancel_transfer_${item.id}")
                         ) {
                             Icon(
@@ -164,7 +222,7 @@ fun TransferItemCard(
                         IconButton(
                             onClick = onRetry,
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .testTag("retry_transfer_${item.id}")
                         ) {
                             Icon(

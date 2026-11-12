@@ -42,12 +42,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.TransferCategory
 import com.example.presentation.components.EmptyStateView
 import com.example.presentation.components.TransferItemCard
+import com.example.presentation.transfer.TransferDetailsDialog
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusSuccess
@@ -57,9 +59,11 @@ fun TransfersScreen(
     viewModel: TransfersViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val transfers by viewModel.currentTransfers.collectAsState(initial = emptyList())
     val stats by viewModel.stats.collectAsState()
+    val selectedDetailItem by viewModel.selectedDetailItem.collectAsState()
 
     val categories = listOf(
         TransferCategory.ACTIVE to "Active (${stats.activeCount})",
@@ -185,6 +189,20 @@ fun TransfersScreen(
             ) { item ->
                 TransferItemCard(
                     item = item,
+                    onClick = { viewModel.openTransferDetails(item) },
+                    onOpenFile = if (!item.filePath.isNullOrBlank()) {
+                        { viewModel.openFile(item) }
+                    } else null,
+                    onShareFile = if (!item.filePath.isNullOrBlank()) {
+                        { viewModel.shareFile(item) }
+                    } else null,
+                    onPauseResume = {
+                        if (item.speed.contains("Pause", ignoreCase = true)) {
+                            viewModel.resumeTransfer(item.id)
+                        } else {
+                            viewModel.pauseTransfer(item.id)
+                        }
+                    },
                     onCancel = { viewModel.cancelTransfer(item.id) },
                     onRetry = { viewModel.retryTransfer(item.id) }
                 )
@@ -194,5 +212,24 @@ fun TransfersScreen(
         item {
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    selectedDetailItem?.let { item ->
+        TransferDetailsDialog(
+            item = item,
+            onOpenFile = if (!item.filePath.isNullOrBlank()) {
+                { viewModel.openFile(item) }
+            } else null,
+            onShareFile = if (!item.filePath.isNullOrBlank()) {
+                { viewModel.shareFile(item) }
+            } else null,
+            onPause = { viewModel.pauseTransfer(item.id) },
+            onResume = { viewModel.resumeTransfer(item.id) },
+            onCancel = {
+                viewModel.cancelTransfer(item.id)
+                viewModel.closeTransferDetails()
+            },
+            onDismiss = { viewModel.closeTransferDetails() }
+        )
     }
 }

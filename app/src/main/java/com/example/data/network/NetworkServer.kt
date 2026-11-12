@@ -11,4 +11,5 @@ interface NetworkServer {
     fun start(port: Int = 53317)
     fun stop()
     fun setMessageHandler(handler: suspend (message: ProtocolMessage, clientSocket: Socket) -> ProtocolMessage?)
+    fun setStreamMessageHandler(handler: suspend (message: ProtocolMessage, clientSocket: Socket, inputStream: java.io.BufferedInputStream) -> ProtocolMessage?) {}
 }

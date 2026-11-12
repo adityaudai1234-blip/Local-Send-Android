@@ -50,6 +50,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,13 +93,26 @@ fun HomeScreen(
     val isScanning by viewModel.isScanning.collectAsState()
     val isReceiving by viewModel.isReceivingActive.collectAsState()
 
+    val selectedFiles by viewModel.selectedFiles.collectAsState()
+    val showFileSelectionDialog by viewModel.showFileSelectionDialog.collectAsState()
+    val showDeviceSelectionDialog by viewModel.showDeviceSelectionDialog.collectAsState()
+    val incomingRequest by viewModel.incomingRequest.collectAsState()
+    val pairedDevices by viewModel.pairedDevices.collectAsState()
+
+    var deviceForDirectSend by remember { mutableStateOf<Device?>(null) }
+
     // File Picker for Send Files action
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (!uris.isNullOrEmpty()) {
-            viewModel.handleSelectedFiles(uris, context)
-            onNavigateToTransfers()
+            if (deviceForDirectSend != null) {
+                viewModel.onFilesPicked(uris, context, deviceForDirectSend)
+                deviceForDirectSend = null
+                onNavigateToTransfers()
+            } else {
+                viewModel.onFilesPicked(uris, context)
+            }
         }
     }
 
@@ -265,6 +281,7 @@ fun HomeScreen(
                     device = device,
                     onClick = onNavigateToDevices,
                     onSendClick = {
+                        deviceForDirectSend = device
                         filePickerLauncher.launch(arrayOf("*/*"))
                     }
                 )
@@ -280,6 +297,45 @@ fun HomeScreen(
         com.example.presentation.pairing.GenerateQrDialog(
             pairingManager = viewModel.pairingManager,
             onDismiss = { viewModel.closeGenerateQr() }
+        )
+    }
+
+    if (showFileSelectionDialog) {
+        com.example.presentation.transfer.FileSelectionDialog(
+            files = selectedFiles,
+            onRemoveFile = { viewModel.removeSelectedFile(it) },
+            onAddFiles = { viewModel.addMoreFiles(it) },
+            onClearAll = { viewModel.clearSelectedFiles() },
+            onProceedToDevices = { viewModel.proceedToDeviceSelection() },
+            onDismiss = { viewModel.dismissFileFlow() }
+        )
+    }
+
+    if (showDeviceSelectionDialog) {
+        com.example.presentation.transfer.DeviceSelectionDialog(
+            files = selectedFiles,
+            discoveredDevices = discoveredDevices,
+            pairedDevices = pairedDevices,
+            onSendToDevices = { targets ->
+                viewModel.sendSelectedFilesToTargets(targets)
+                onNavigateToTransfers()
+            },
+            onBackToFiles = { viewModel.backToFileSelection() },
+            onRefreshDiscovery = { viewModel.refreshDiscovery() },
+            onDismiss = { viewModel.dismissFileFlow() }
+        )
+    }
+
+    incomingRequest?.let { req ->
+        com.example.presentation.transfer.IncomingTransferDialog(
+            request = req,
+            onAccept = {
+                viewModel.acceptIncomingTransfer(req)
+                onNavigateToTransfers()
+            },
+            onDecline = {
+                viewModel.rejectIncomingTransfer(req)
+            }
         )
     }
 }

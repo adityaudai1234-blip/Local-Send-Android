@@ -71,17 +71,21 @@ class PairingManager(
     }
 
     private fun setupServerMessageHandler() {
-        server.setMessageHandler { message, clientSocket ->
-            when (message.type) {
-                ProtocolMessageType.PAIRING_REQUEST -> handleIncomingPairingRequest(message)
-                ProtocolMessageType.AUTHENTICATION_REQUEST -> handleIncomingAuthRequest(message)
-                ProtocolMessageType.HEARTBEAT -> ProtocolMessage(
-                    type = ProtocolMessageType.HEARTBEAT,
-                    senderId = myDeviceId,
-                    payload = mapOf("pong" to System.currentTimeMillis())
-                )
-                else -> null
-            }
+        server.setMessageHandler { message, _ ->
+            handleIncomingMessage(message)
+        }
+    }
+
+    suspend fun handleIncomingMessage(message: ProtocolMessage): ProtocolMessage? {
+        return when (message.type) {
+            ProtocolMessageType.PAIRING_REQUEST -> handleIncomingPairingRequest(message)
+            ProtocolMessageType.AUTHENTICATION_REQUEST -> handleIncomingAuthRequest(message)
+            ProtocolMessageType.HEARTBEAT -> ProtocolMessage(
+                type = ProtocolMessageType.HEARTBEAT,
+                senderId = myDeviceId,
+                payload = mapOf("pong" to System.currentTimeMillis())
+            )
+            else -> null
         }
     }
 
