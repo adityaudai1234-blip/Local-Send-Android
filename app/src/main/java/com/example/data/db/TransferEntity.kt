@@ -7,15 +7,23 @@ import androidx.room.PrimaryKey
 data class TransferEntity(
     @PrimaryKey
     val id: String,
-    val sessionId: String,
+    val sessionId: String = "",
     val fileName: String,
-    val fileSize: Long,
-    val direction: String, // "SEND" or "RECEIVE"
-    val status: String,    // "COMPLETED", "FAILED", "CANCELLED"
-    val peerDeviceName: String,
-    val peerAddress: String,
-    val filePath: String? = null,
+    val fileExtension: String = "",
     val mimeType: String? = null,
-    val timestamp: Long = System.currentTimeMillis(),
-    val speed: String? = null
+    val fileSize: Long,
+    val senderDevice: String,
+    val receiverDevice: String,
+    val direction: String, // "SENT" or "RECEIVED"
+    val status: String,    // "COMPLETED", "FAILED", "CANCELLED"
+    val startTime: Long = System.currentTimeMillis(),
+    val completionTime: Long = System.currentTimeMillis(),
+    val durationMs: Long = 0L,
+    val speed: String? = null,
+    val checksum: String? = null,
+    val filePath: String? = null,
+    val peerDeviceName: String = "",
+    val peerAddress: String = "",
+    val errorMessage: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
 )

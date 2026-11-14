@@ -108,7 +108,15 @@ class TransferManager(
                 peerAddress = entity.peerAddress,
                 timestamp = entity.timestamp,
                 filePath = entity.filePath,
-                mimeType = entity.mimeType
+                mimeType = entity.mimeType,
+                senderDevice = entity.senderDevice,
+                receiverDevice = entity.receiverDevice,
+                startTime = entity.startTime,
+                completionTime = entity.completionTime,
+                durationMs = entity.durationMs,
+                checksum = entity.checksum,
+                fileExtension = entity.fileExtension.ifEmpty { entity.fileName.substringAfterLast('.', "") },
+                errorMessage = entity.errorMessage
             )
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -119,6 +127,7 @@ class TransferManager(
 
     init {
         scope.launch {
+            storageManager.cleanAllTempFiles() // Safe recovery cleanup on startup
             transferHistory.collect {
                 recalculateStats()
             }
@@ -293,7 +302,9 @@ class TransferManager(
 
                 // Connect streaming socket to peer
                 var socket: Socket? = null
+                val fileStartTime = System.currentTimeMillis()
                 try {
+                    FileTransferService.start(context)
                     socket = Socket()
                     socket.connect(InetSocketAddress(target.ipAddress, target.port), 10_000)
                     socket.soTimeout = 30_000
@@ -310,13 +321,14 @@ class TransferManager(
                             "fileIndex" to i,
                             "fileName" to meta.fileName,
                             "fileSize" to meta.fileSize,
-                            "mimeType" to meta.mimeType
+                            "mimeType" to meta.mimeType,
+                            "senderName" to settingsRepository.settings.value.deviceName
                         )
                     )
                     MessageFraming.writeFrame(output, startMsg)
 
                     // Stream binary chunks
-                    streamSingleFile(
+                    val checksumHex = streamSingleFile(
                         file = file,
                         fileIndex = i,
                         transferId = transferId,
@@ -331,7 +343,9 @@ class TransferManager(
                         fileName = meta.fileName,
                         fileSize = meta.fileSize,
                         direction = TransferDirection.SEND,
-                        peer = target
+                        peer = target,
+                        checksum = checksumHex,
+                        startTime = fileStartTime
                     )
 
                 } catch (e: Exception) {
@@ -343,7 +357,8 @@ class TransferManager(
                         fileSize = meta.fileSize,
                         direction = TransferDirection.SEND,
                         peer = target,
-                        error = e.localizedMessage ?: "Stream error"
+                        error = e.localizedMessage ?: "Stream error",
+                        startTime = fileStartTime
                     )
                 } finally {
                     try {
@@ -429,7 +444,7 @@ class TransferManager(
             // Write EOF frame with SHA-256 hash
             val sha256Bytes = digest.digest()
             FileStreamFraming.writeEof(output, fileIndex, sha256Bytes)
-
+            FileStreamFraming.bytesToHex(sha256Bytes)
         } finally {
             try {
                 inputStream.close()

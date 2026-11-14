@@ -159,4 +159,48 @@ class StorageManager(private val context: Context) {
             true
         }
     }
+
+    fun getTotalReceivedStorageBytes(): Long {
+        return try {
+            listReceivedFiles().sumOf { it.length() }
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    fun getTotalTempStorageBytes(): Long {
+        return try {
+            tempDir.listFiles()?.sumOf { it.length() } ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    fun getUsableStorageBytes(): Long {
+        return try {
+            downloadsDir.usableSpace
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    fun cleanAllTempFiles(): Int {
+        var count = 0
+        try {
+            tempDir.listFiles()?.forEach {
+                if (it.delete()) count++
+            }
+        } catch (_: Exception) {}
+        return count
+    }
+
+    fun deleteAllReceivedFiles(): Int {
+        var count = 0
+        try {
+            listReceivedFiles().forEach {
+                if (it.delete()) count++
+            }
+        } catch (_: Exception) {}
+        return count
+    }
 }

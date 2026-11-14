@@ -42,6 +42,14 @@ class SettingsRepositoryImpl(
         dataStore.updateAutoStartReceiving(enabled)
     }
 
+    override suspend fun setAutoAcceptTrusted(enabled: Boolean) {
+        dataStore.updateAutoAcceptTrusted(enabled)
+    }
+
+    override suspend fun setAskBeforeReceiving(enabled: Boolean) {
+        dataStore.updateAskBeforeReceiving(enabled)
+    }
+
     override suspend fun setDownloadLocation(path: String) {
         dataStore.updateDownloadLocation(path)
     }
@@ -52,5 +60,29 @@ class SettingsRepositoryImpl(
 
     override suspend fun setBroadcastEnabled(enabled: Boolean) {
         dataStore.updateBroadcastEnabled(enabled)
+    }
+
+    override suspend fun setShowNotifications(enabled: Boolean) {
+        dataStore.updateShowNotifications(enabled)
+    }
+
+    override suspend fun setMaxConcurrent(count: Int) {
+        dataStore.updateMaxConcurrent(count)
+    }
+
+    override suspend fun setDuplicateHandling(handling: String) {
+        dataStore.updateDuplicateHandling(handling)
+    }
+
+    override suspend fun setAutoOpenCompleted(enabled: Boolean) {
+        dataStore.updateAutoOpenCompleted(enabled)
+    }
+
+    override suspend fun setMaxAcceptedFileSizeMb(sizeMb: Long) {
+        dataStore.updateMaxAcceptedFileSizeMb(sizeMb)
+    }
+
+    override suspend fun setRequireApprovalUnknown(enabled: Boolean) {
+        dataStore.updateRequireApprovalUnknown(enabled)
     }
 }

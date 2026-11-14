@@ -1,13 +1,13 @@
 package com.example.domain.model
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.ui.graphics.vector.ImageVector
 import java.util.Locale
@@ -44,7 +44,14 @@ data class TransferItem(
     val timestamp: Long = System.currentTimeMillis(),
     val errorMessage: String? = null,
     val filePath: String? = null,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    val senderDevice: String = "",
+    val receiverDevice: String = "",
+    val startTime: Long = timestamp,
+    val completionTime: Long = timestamp,
+    val durationMs: Long = 0L,
+    val checksum: String? = null,
+    val fileExtension: String = fileName.substringAfterLast('.', "")
 ) {
     val category: TransferCategory
         get() = when (status) {
@@ -56,6 +63,15 @@ data class TransferItem(
     val formattedSize: String
         get() = formatBytes(fileSize)
 
+    val formattedDuration: String
+        get() {
+            if (durationMs <= 0L) return "< 1s"
+            val totalSeconds = durationMs / 1000
+            val minutes = totalSeconds / 60
+            val seconds = totalSeconds % 60
+            return if (minutes > 0) "${minutes}m ${seconds}s" else "${seconds}s"
+        }
+
     val fileTypeIcon: ImageVector
         get() {
             val extension = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
@@ -66,7 +82,7 @@ data class TransferItem(
                 "zip", "tar", "gz", "rar", "7z" -> Icons.Default.Archive
                 "kt", "java", "rs", "ts", "js", "html", "css", "py", "c", "cpp", "json" -> Icons.Default.Code
                 "pdf", "doc", "docx", "txt", "md", "xls", "xlsx", "ppt", "pptx" -> Icons.Default.Description
-                else -> Icons.Default.InsertDriveFile
+                else -> Icons.AutoMirrored.Filled.InsertDriveFile
             }
         }
 
