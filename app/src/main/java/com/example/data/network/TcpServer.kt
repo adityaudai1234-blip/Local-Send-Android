@@ -3,6 +3,7 @@ package com.example.data.network
 import android.util.Log
 import com.example.data.protocol.MessageFraming
 import com.example.data.protocol.ProtocolMessage
+import com.example.data.security.SecurityValidator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,7 +53,8 @@ class TcpServer : NetworkServer {
 
         serverJob = scope.launch {
             try {
-                val server = ServerSocket(port).apply {
+                val safePort = if (SecurityValidator.isValidPort(port)) port else 53317
+                val server = ServerSocket(safePort).apply {
                     reuseAddress = true
                 }
                 serverSocket = server
@@ -63,6 +65,14 @@ class TcpServer : NetworkServer {
                 while (isActive && !server.isClosed) {
                     try {
                         val clientSocket = server.accept()
+                        val remoteIp = clientSocket.inetAddress?.hostAddress ?: "unknown"
+                        if (!SecurityValidator.allowIncomingConnection(remoteIp)) {
+                            Log.w(TAG, "Rate limit exceeded from $remoteIp; closing socket")
+                            try {
+                                clientSocket.close()
+                            } catch (_: Exception) {}
+                            continue
+                        }
                         activeClientSockets.add(clientSocket)
                         handleClient(clientSocket)
                     } catch (e: Exception) {
@@ -82,13 +92,17 @@ class TcpServer : NetworkServer {
     private fun handleClient(socket: Socket) {
         scope.launch {
             try {
-                socket.soTimeout = 30_000 // 30s timeout per message
+                socket.soTimeout = 30_000
                 val input = BufferedInputStream(socket.getInputStream())
                 val output = BufferedOutputStream(socket.getOutputStream())
 
                 while (isActive && !socket.isClosed && socket.isConnected) {
                     val message = MessageFraming.readFrame(input) ?: break
-                    Log.d(TAG, "Received message type=${message.type} from ${socket.inetAddress.hostAddress}")
+                    if (message.senderId.isBlank()) {
+                        Log.w(TAG, "Rejected malformed protocol frame with blank senderId")
+                        break
+                    }
+                    Log.d(TAG, "Received message type=${message.type} from ${socket.inetAddress?.hostAddress}")
 
                     val sHandler = streamMessageHandler
                     if (sHandler != null) {
@@ -107,7 +121,7 @@ class TcpServer : NetworkServer {
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Client socket closed: ${e.message}")
+                Log.w(TAG, "Client socket closed or malformed frame: ${e.message}")
             } finally {
                 activeClientSockets.remove(socket)
                 try {

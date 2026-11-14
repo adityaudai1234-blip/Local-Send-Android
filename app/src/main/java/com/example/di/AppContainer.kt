@@ -120,7 +120,7 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val transferRepository: TransferRepository by lazy {
-        TransferRepositoryImpl(transferManager, appDatabase.transferDao())
+        TransferRepositoryImpl(transferManager, appDatabase.transferDao(), storageManager)
     }
 
     override val pairingManager: PairingManager by lazy {
@@ -138,12 +138,10 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     init {
         // Configure unified TCP server stream message routing
         tcpServer.setStreamMessageHandler { message, socket, input ->
-            // Try transfer manager first (for transfer requests, streaming chunks, cancellations)
             val transferResponse = transferManager.handleProtocolMessage(message, socket, input)
             if (transferResponse != null) {
                 transferResponse
             } else {
-                // Otherwise let pairing manager handle pairing / auth / heartbeat
                 pairingManager.handleIncomingMessage(message)
             }
         }

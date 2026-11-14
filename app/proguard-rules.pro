@@ -1,21 +1,31 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# LocalDrop R8 / ProGuard Production Rules
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve stack trace line numbers safely
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Room Database Entities, DAOs, and TypeConverters
+-keep class com.example.data.db.** { *; }
+-keepclassmembers class * extends androidx.room.RoomDatabase {
+    <init>(...);
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Protocol & Pairing Models
+-keep class com.example.data.protocol.** { *; }
+-keep class com.example.data.pairing.PairingPayload { *; }
+-keep class com.example.domain.model.** { *; }
+
+# Components referenced by AndroidManifest.xml
+-keep class com.example.LocalDropApp { *; }
+-keep class com.example.MainActivity { *; }
+-keep class com.example.data.transfer.FileTransferService { *; }
+-keep class com.example.data.transfer.TransferNotificationReceiver { *; }
+
+# ZXing QR Core
+-keep class com.google.zxing.** { *; }
+-dontwarn com.google.zxing.**
+
+# Kotlin Coroutines
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+-dontwarn kotlinx.coroutines.flow.**

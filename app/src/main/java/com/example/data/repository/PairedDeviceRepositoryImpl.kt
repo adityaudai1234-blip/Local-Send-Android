@@ -8,7 +8,6 @@ import com.example.domain.model.PairedDevice
 import com.example.domain.repository.PairedDeviceRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import java.util.UUID
 
 class PairedDeviceRepositoryImpl(
     private val dao: PairedDeviceDao,
@@ -72,22 +71,19 @@ class PairedDeviceRepositoryImpl(
         dao.deleteById(id)
     }
 
+    override suspend fun renameDevice(id: String, newAlias: String) {
+        val trimmed = newAlias.trim()
+        if (trimmed.isNotEmpty()) {
+            dao.renameDevice(id, trimmed)
+        }
+    }
+
     override suspend fun updateLastConnected(id: String) {
         dao.updateLastConnected(id, System.currentTimeMillis())
     }
 
-    override suspend fun addSamplePairedDevice() {
-        val sampleToken = securityKeyStore.generateSecureToken()
-        val device = PairedDevice(
-            id = "tauri-desktop-${UUID.randomUUID().toString().take(6)}",
-            alias = "Tauri Workstation",
-            deviceType = DeviceType.WINDOWS,
-            ipAddress = "192.168.1.142",
-            port = 53317,
-            isTrusted = true,
-            model = "Windows 11 (Tauri 2.0)",
-            pairedAt = System.currentTimeMillis() - 86_400_000L
-        )
-        savePairedDevice(device, sampleToken)
+    override suspend fun clearAllDevices() {
+        dao.deleteAll()
+        securityKeyStore.clearAllKeys()
     }
 }

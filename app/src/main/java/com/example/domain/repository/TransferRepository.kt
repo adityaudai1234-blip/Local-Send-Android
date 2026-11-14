@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 interface TransferRepository {
     val transfers: StateFlow<List<TransferItem>>
+    val transferHistory: StateFlow<List<TransferItem>>
     val stats: StateFlow<TransferStats>
 
     fun getTransfersByCategory(category: TransferCategory): List<TransferItem>
@@ -15,5 +16,6 @@ interface TransferRepository {
     fun retryTransfer(id: String)
     fun clearCompleted()
     fun clearAll()
-    fun populateSampleTransfers()
+    fun deleteHistoryEntry(id: String)
+    fun deleteHistoryEntryWithFile(item: TransferItem)
 }

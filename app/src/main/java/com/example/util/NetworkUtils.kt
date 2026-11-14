@@ -76,4 +76,25 @@ object NetworkUtils {
             null
         }
     }
+
+    fun getActiveInterfaceSummary(): String {
+        return try {
+            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            for (intf in interfaces) {
+                if (intf.isLoopback || !intf.isUp) continue
+                val addrs = Collections.list(intf.inetAddresses)
+                for (addr in addrs) {
+                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                        val ip = addr.hostAddress ?: continue
+                        if (!ip.startsWith("127.")) {
+                            return "${intf.displayName} • $ip"
+                        }
+                    }
+                }
+            }
+            "No active LAN interface"
+        } catch (_: Exception) {
+            "Unavailable"
+        }
+    }
 }

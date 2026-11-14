@@ -1,6 +1,5 @@
 package com.example.presentation.devices
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,13 +16,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WifiFind
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -32,15 +31,20 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.data.network.ConnectionState
 import com.example.data.pairing.PairingPayload
@@ -49,18 +53,18 @@ import com.example.domain.model.PairedDevice
 import com.example.presentation.components.DeviceCard
 import com.example.presentation.components.EmptyStateView
 import com.example.presentation.components.PulseScanningIndicator
-import com.example.presentation.components.StatusBadge
 import com.example.presentation.pairing.GenerateQrDialog
 import com.example.presentation.pairing.PairingConfirmationDialog
 import com.example.presentation.pairing.PairingProgressDialog
 import com.example.presentation.pairing.ScanQrDialog
 import com.example.ui.theme.CyanAccent
-import com.example.ui.theme.IndigoAccent
+import java.util.UUID
 
 @Composable
 fun DevicesScreen(
     viewModel: DevicesViewModel,
     onDeviceSelected: (Device) -> Unit,
+    onManageTrustedClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val devices by viewModel.devices.collectAsState()
@@ -76,6 +80,10 @@ fun DevicesScreen(
     val showScanQr by viewModel.showScanQr.collectAsState()
     val pendingScannedPayload by viewModel.pendingScannedPayload.collectAsState()
     val selectedDeviceForDetails by viewModel.selectedDeviceForDetails.collectAsState()
+
+    var devicePendingUnpair by remember { mutableStateOf<PairedDevice?>(null) }
+    var devicePendingRename by remember { mutableStateOf<PairedDevice?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = modifier
@@ -115,7 +123,7 @@ fun DevicesScreen(
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Port 53317 • _lsend._tcp",
+                                    text = "_lsend._tcp • Local peer discovery",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -124,7 +132,9 @@ fun DevicesScreen(
 
                         IconButton(
                             onClick = { viewModel.refreshDiscovery() },
-                            modifier = Modifier.testTag("refresh_devices_button")
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("refresh_devices_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
@@ -136,7 +146,6 @@ fun DevicesScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // QR Pairing Buttons Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -177,7 +186,6 @@ fun DevicesScreen(
             }
         }
 
-        // Error banner if any
         if (!error.isNullOrBlank()) {
             item {
                 Card(
@@ -229,21 +237,24 @@ fun DevicesScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Paired Devices (${pairedDevices.size})",
+                        text = "Trusted Devices (${pairedDevices.size})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
-                if (pairedDevices.isEmpty()) {
-                    OutlinedButton(
-                        onClick = { viewModel.addSamplePairedDevice() },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.height(28.dp)
-                    ) {
-                        Text("+ Sample Desktop", style = MaterialTheme.typography.labelSmall)
-                    }
+                TextButton(
+                    onClick = onManageTrustedClick,
+                    modifier = Modifier.testTag("manage_trusted_devices_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ManageAccounts,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Manage")
                 }
             }
         }
@@ -265,17 +276,17 @@ fun DevicesScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "No paired devices yet",
+                            text = "No trusted devices yet",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Scan a QR code from a Tauri desktop app or nearby device to establish a trusted bond.",
+                            text = "Scan a QR code from a Tauri desktop app or nearby Android device to establish a mutually authenticated bond.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -292,7 +303,11 @@ fun DevicesScreen(
                     onConnectClick = { viewModel.connectDevice(pairedDevice) },
                     onDisconnectClick = { viewModel.disconnectDevice(pairedDevice.id) },
                     onDetailsClick = { viewModel.openDeviceDetails(pairedDevice) },
-                    onRemoveClick = { viewModel.removePairedDevice(pairedDevice.id) }
+                    onRenameClick = {
+                        renameText = pairedDevice.alias
+                        devicePendingRename = pairedDevice
+                    },
+                    onRemoveClick = { devicePendingUnpair = pairedDevice }
                 )
             }
         }
@@ -306,27 +321,24 @@ fun DevicesScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Nearby Devices (${devices.size})",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                Text(
+                    text = "Nearby Devices (${devices.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
 
-                OutlinedButton(
-                    onClick = { viewModel.addTestPeers() },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.testTag("add_test_peers_button")
+                TextButton(
+                    onClick = { viewModel.refreshDiscovery() },
+                    modifier = Modifier.testTag("rescan_nearby_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Add,
+                        imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "Add Test Peer", style = MaterialTheme.typography.labelSmall)
+                    Text("Rescan")
                 }
             }
         }
@@ -336,7 +348,7 @@ fun DevicesScreen(
                 EmptyStateView(
                     icon = Icons.Default.WifiFind,
                     title = "No nearby devices found",
-                    description = "Make sure Tauri desktop or mobile peers are on '${connectionStatus.networkName}' and advertising.",
+                    description = "Make sure Tauri desktop or mobile peers are on '${connectionStatus.networkName}' and broadcasting.",
                     actionButtonText = "Scan Again",
                     onActionClick = { viewModel.refreshDiscovery() }
                 )
@@ -350,10 +362,9 @@ fun DevicesScreen(
                     device = device,
                     onClick = { onDeviceSelected(device) },
                     onSendClick = {
-                        // Create a pairing payload to initiate pairing with discovered peer
                         val payload = PairingPayload(
-                            protocolVersion = "v1",
-                            sessionId = java.util.UUID.randomUUID().toString(),
+                            protocolVersion = "v2",
+                            sessionId = UUID.randomUUID().toString(),
                             pairingToken = "mdns_peer_token",
                             deviceId = device.id,
                             deviceName = device.alias,
@@ -373,7 +384,6 @@ fun DevicesScreen(
         }
     }
 
-    // DIALOG 1: Generate QR Dialog
     if (showGenerateQr) {
         GenerateQrDialog(
             pairingManager = viewModel.pairingManager,
@@ -381,7 +391,6 @@ fun DevicesScreen(
         )
     }
 
-    // DIALOG 2: Scan QR Dialog
     if (showScanQr) {
         ScanQrDialog(
             onPayloadScanned = { payload ->
@@ -391,7 +400,6 @@ fun DevicesScreen(
         )
     }
 
-    // DIALOG 3: Pairing Confirmation Dialog
     pendingScannedPayload?.let { payload ->
         PairingConfirmationDialog(
             payload = payload,
@@ -400,21 +408,88 @@ fun DevicesScreen(
         )
     }
 
-    // DIALOG 4: Pairing Handshake Progress Dialog
     PairingProgressDialog(
         result = pairingResult,
         onDismiss = { viewModel.resetPairingResult() }
     )
 
-    // DIALOG 5: Device Details Dialog
     selectedDeviceForDetails?.let { device ->
         val connState = connectionStates[device.id] ?: ConnectionState.Disconnected
         DeviceDetailsDialog(
             device = device,
             connectionState = connState,
             connectionManager = viewModel.connectionManager,
-            onRemoveDevice = { viewModel.removePairedDevice(device.id) },
+            onRemoveDevice = {
+                viewModel.closeDeviceDetails()
+                devicePendingUnpair = device
+            },
             onDismiss = { viewModel.closeDeviceDetails() }
+        )
+    }
+
+    devicePendingRename?.let { target ->
+        AlertDialog(
+            onDismissRequest = { devicePendingRename = null },
+            title = { Text("Rename Trusted Device") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("Local Device Alias") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("input_rename_paired_device")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (renameText.isNotBlank()) {
+                            viewModel.renamePairedDevice(target.id, renameText.trim())
+                        }
+                        devicePendingRename = null
+                    },
+                    enabled = renameText.isNotBlank(),
+                    modifier = Modifier.testTag("confirm_rename_device_button")
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { devicePendingRename = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    devicePendingUnpair?.let { target ->
+        AlertDialog(
+            onDismissRequest = { devicePendingUnpair = null },
+            title = { Text("Remove Trusted Device?") },
+            text = {
+                Text(
+                    "Removing trust for '${target.alias}' disconnects any active session and permanently deletes its encrypted authentication credentials from Android Keystore."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.removePairedDevice(target.id)
+                        devicePendingUnpair = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_unpair_device_button")
+                ) {
+                    Text("Remove Trust")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { devicePendingUnpair = null }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

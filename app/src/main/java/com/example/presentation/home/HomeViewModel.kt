@@ -161,8 +161,4 @@ class HomeViewModel(
     fun handleSelectedFiles(uris: List<Uri>, context: Context, targetDevice: Device? = null) {
         onFilesPicked(uris, context, targetDevice)
     }
-
-    fun addTestPeer() {
-        discoveryRepository.addPredefinedTestPeers()
-    }
 }

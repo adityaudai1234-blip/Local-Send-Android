@@ -24,6 +24,9 @@ interface PairedDeviceDao {
     @Query("UPDATE paired_devices SET lastConnectedAt = :timestamp WHERE id = :id")
     suspend fun updateLastConnected(id: String, timestamp: Long)
 
+    @Query("UPDATE paired_devices SET alias = :newAlias WHERE id = :id")
+    suspend fun renameDevice(id: String, newAlias: String)
+
     @Query("DELETE FROM paired_devices")
     suspend fun deleteAll()
 }

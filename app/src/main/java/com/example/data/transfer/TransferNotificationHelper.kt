@@ -17,6 +17,8 @@ class TransferNotificationHelper(private val context: Context) {
         const val CHANNEL_TRANSFERS = "channel_transfers"
         const val CHANNEL_REQUESTS = "channel_incoming_requests"
 
+        const val GROUP_TRANSFERS = "com.example.localdrop.TRANSFERS_GROUP"
+        const val NOTIFICATION_ID_GROUP_SUMMARY = 1001
         const val NOTIFICATION_ID_PROGRESS_BASE = 1000
         const val NOTIFICATION_ID_REQUEST = 999
     }
@@ -34,7 +36,7 @@ class TransferNotificationHelper(private val context: Context) {
                 "File Transfers",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows real-time progress of active file transfers"
+                description = "Shows real-time progress and completion status of file transfers"
             }
 
             val requestChannel = NotificationChannel(
@@ -52,20 +54,77 @@ class TransferNotificationHelper(private val context: Context) {
         }
     }
 
+    private fun createOpenAppPendingIntent(requestCode: Int = 0): PendingIntent {
+        val openAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    fun showIncomingTransferRequest(request: IncomingTransferRequest) {
+        try {
+            val acceptIntent = Intent(context, TransferNotificationReceiver::class.java).apply {
+                action = TransferNotificationReceiver.ACTION_ACCEPT_TRANSFER
+                putExtra(TransferNotificationReceiver.EXTRA_SESSION_ID, request.sessionId)
+            }
+            val acceptPending = PendingIntent.getBroadcast(
+                context,
+                request.sessionId.hashCode(),
+                acceptIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val declineIntent = Intent(context, TransferNotificationReceiver::class.java).apply {
+                action = TransferNotificationReceiver.ACTION_REJECT_TRANSFER
+                putExtra(TransferNotificationReceiver.EXTRA_SESSION_ID, request.sessionId)
+            }
+            val declinePending = PendingIntent.getBroadcast(
+                context,
+                request.sessionId.hashCode() + 1,
+                declineIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val builder = NotificationCompat.Builder(context, CHANNEL_REQUESTS)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Incoming transfer from ${request.senderName}")
+                .setContentText("${request.files.size} file(s) • ${request.formattedTotalBytes}")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(createOpenAppPendingIntent(NOTIFICATION_ID_REQUEST))
+                .addAction(0, "Accept", acceptPending)
+                .addAction(0, "Decline", declinePending)
+
+            notificationManager.notify(NOTIFICATION_ID_REQUEST, builder.build())
+        } catch (_: SecurityException) {}
+    }
+
+    fun cancelIncomingRequestNotification() {
+        cancelNotification(NOTIFICATION_ID_REQUEST)
+    }
+
     fun showTransferProgress(
         notificationId: Int,
+        transferId: String,
         fileName: String,
         progressPercent: Int,
-        speedStr: String
+        speedStr: String,
+        activeCount: Int = 1
     ) {
         try {
-            val openAppIntent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            val cancelIntent = Intent(context, TransferNotificationReceiver::class.java).apply {
+                action = TransferNotificationReceiver.ACTION_CANCEL_TRANSFER
+                putExtra(TransferNotificationReceiver.EXTRA_TRANSFER_ID, transferId)
             }
-            val pendingIntent = PendingIntent.getActivity(
+            val cancelPending = PendingIntent.getBroadcast(
                 context,
-                0,
-                openAppIntent,
+                notificationId,
+                cancelIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -75,45 +134,76 @@ class TransferNotificationHelper(private val context: Context) {
                 .setContentText("$progressPercent% • $speedStr")
                 .setProgress(100, progressPercent, false)
                 .setOngoing(true)
-                .setContentIntent(pendingIntent)
+                .setGroup(GROUP_TRANSFERS)
+                .setContentIntent(createOpenAppPendingIntent(notificationId))
                 .setOnlyAlertOnce(true)
+                .addAction(0, "Cancel", cancelPending)
 
             notificationManager.notify(notificationId, builder.build())
-        } catch (_: SecurityException) {
-            // Notifications permission not granted
-        }
-    }
 
-    fun showTransferComplete(notificationId: Int, fileName: String, totalSize: String) {
-        try {
-            val openAppIntent = Intent(context, MainActivity::class.java)
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                0,
-                openAppIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setContentTitle("Transfer Complete")
-                .setContentText("$fileName ($totalSize) received successfully")
-                .setAutoCancel(true)
-                .setContentIntent(pendingIntent)
-
-            notificationManager.notify(notificationId, builder.build())
+            if (activeCount > 1) {
+                val summary = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
+                    .setSmallIcon(R.drawable.ic_launcher_foreground)
+                    .setContentTitle("LocalDrop Transfers")
+                    .setContentText("$activeCount active file transfers")
+                    .setGroup(GROUP_TRANSFERS)
+                    .setGroupSummary(true)
+                    .setOnlyAlertOnce(true)
+                    .setOngoing(true)
+                    .build()
+                notificationManager.notify(NOTIFICATION_ID_GROUP_SUMMARY, summary)
+            }
         } catch (_: SecurityException) {}
     }
 
-    fun showTransferFailed(notificationId: Int, fileName: String, reason: String) {
+    fun showTransferComplete(notificationId: Int, fileName: String, totalSize: String, isSend: Boolean = false) {
+        try {
+            val verb = if (isSend) "sent" else "received"
+            val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Transfer Complete")
+                .setContentText("$fileName ($totalSize) $verb successfully")
+                .setGroup(GROUP_TRANSFERS)
+                .setAutoCancel(true)
+                .setContentIntent(createOpenAppPendingIntent(notificationId))
+
+            notificationManager.notify(notificationId, builder.build())
+            notificationManager.cancel(NOTIFICATION_ID_GROUP_SUMMARY)
+        } catch (_: SecurityException) {}
+    }
+
+    fun showTransferFailed(
+        notificationId: Int,
+        transferId: String,
+        fileName: String,
+        reason: String,
+        canRetry: Boolean = false
+    ) {
         try {
             val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle("Transfer Failed")
                 .setContentText("$fileName: $reason")
+                .setGroup(GROUP_TRANSFERS)
                 .setAutoCancel(true)
+                .setContentIntent(createOpenAppPendingIntent(notificationId))
+
+            if (canRetry) {
+                val retryIntent = Intent(context, TransferNotificationReceiver::class.java).apply {
+                    action = TransferNotificationReceiver.ACTION_RETRY_TRANSFER
+                    putExtra(TransferNotificationReceiver.EXTRA_TRANSFER_ID, transferId)
+                }
+                val retryPending = PendingIntent.getBroadcast(
+                    context,
+                    notificationId + 2,
+                    retryIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                builder.addAction(0, "Retry", retryPending)
+            }
 
             notificationManager.notify(notificationId, builder.build())
+            notificationManager.cancel(NOTIFICATION_ID_GROUP_SUMMARY)
         } catch (_: SecurityException) {}
     }
 

@@ -9,6 +9,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class SecurityKeyStore {
 
@@ -20,18 +21,29 @@ class SecurityKeyStore {
         private const val GCM_IV_LENGTH = 12
     }
 
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
-        load(null)
-    }
-
+    private var keyStore: KeyStore? = null
+    private var inMemoryFallbackKey: SecretKey? = null
     private val secureRandom = SecureRandom()
 
+    val isUsingAndroidKeyStore: Boolean
+        get() = keyStore != null
+
     init {
-        ensureMasterKey()
+        try {
+            val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            keyStore = ks
+            ensureMasterKey(ks)
+        } catch (_: Exception) {
+            // Fallback for non-Android JVM unit test environments
+            keyStore = null
+            val bytes = ByteArray(32)
+            secureRandom.nextBytes(bytes)
+            inMemoryFallbackKey = SecretKeySpec(bytes, "AES")
+        }
     }
 
-    private fun ensureMasterKey() {
-        if (!keyStore.containsAlias(MASTER_KEY_ALIAS)) {
+    private fun ensureMasterKey(ks: KeyStore) {
+        if (!ks.containsAlias(MASTER_KEY_ALIAS)) {
             val keyGenerator = KeyGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_AES,
                 ANDROID_KEYSTORE
@@ -52,7 +64,16 @@ class SecurityKeyStore {
     }
 
     private fun getMasterKey(): SecretKey {
-        return keyStore.getKey(MASTER_KEY_ALIAS, null) as SecretKey
+        val ks = keyStore
+        if (ks != null) {
+            ensureMasterKey(ks)
+            return ks.getKey(MASTER_KEY_ALIAS, null) as SecretKey
+        }
+        return inMemoryFallbackKey ?: run {
+            val bytes = ByteArray(32)
+            secureRandom.nextBytes(bytes)
+            SecretKeySpec(bytes, "AES").also { inMemoryFallbackKey = it }
+        }
     }
 
     fun encryptToken(plainToken: String): String {
@@ -61,7 +82,6 @@ class SecurityKeyStore {
         val iv = cipher.iv
         val encryptedBytes = cipher.doFinal(plainToken.toByteArray(Charsets.UTF_8))
 
-        // Prepend 12-byte IV to ciphertext
         val combined = ByteArray(iv.size + encryptedBytes.size)
         System.arraycopy(iv, 0, combined, 0, iv.size)
         System.arraycopy(encryptedBytes, 0, combined, iv.size, encryptedBytes.size)
@@ -86,6 +106,17 @@ class SecurityKeyStore {
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun clearAllKeys() {
+        try {
+            val ks = keyStore
+            if (ks != null && ks.containsAlias(MASTER_KEY_ALIAS)) {
+                ks.deleteEntry(MASTER_KEY_ALIAS)
+                ensureMasterKey(ks)
+            }
+        } catch (_: Exception) {}
+        inMemoryFallbackKey = null
     }
 
     fun generateSecureToken(byteLength: Int = 24): String {

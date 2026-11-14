@@ -302,10 +302,24 @@ class PairingManager(
 
     private suspend fun handleIncomingAuthRequest(message: ProtocolMessage): ProtocolMessage {
         val deviceId = message.senderId
-        val providedToken = message.payload["token"] as? String
+        if (com.example.data.security.SecurityValidator.isPeerAuthLockedOut(deviceId)) {
+            return ProtocolMessage(
+                type = ProtocolMessageType.ERROR,
+                senderId = myDeviceId,
+                receiverId = deviceId,
+                payload = mapOf(
+                    "code" to "AUTH_LOCKED",
+                    "message" to "Too many failed authentication attempts. Try again later."
+                )
+            )
+        }
 
+        val providedToken = message.payload["token"] as? String
         val storedToken = pairedDeviceRepository.getAuthToken(deviceId)
-        return if (storedToken != null && storedToken == providedToken) {
+        val isMatch = !storedToken.isNullOrBlank() && storedToken == providedToken
+        com.example.data.security.SecurityValidator.recordAuthResult(deviceId, isMatch)
+
+        return if (isMatch) {
             pairedDeviceRepository.updateLastConnected(deviceId)
             connectionManager.setConnectionState(deviceId, ConnectionState.Connected)
             ProtocolMessage(

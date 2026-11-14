@@ -57,10 +57,6 @@ class DevicesViewModel(
         discoveryRepository.refreshDiscovery()
     }
 
-    fun addTestPeers() {
-        discoveryRepository.addPredefinedTestPeers()
-    }
-
     fun openGenerateQr() {
         _showGenerateQr.value = true
     }
@@ -112,16 +108,16 @@ class DevicesViewModel(
         _selectedDeviceForDetails.value = null
     }
 
+    fun renamePairedDevice(deviceId: String, newAlias: String) {
+        viewModelScope.launch {
+            pairedDeviceRepository.renameDevice(deviceId, newAlias)
+        }
+    }
+
     fun removePairedDevice(deviceId: String) {
         viewModelScope.launch {
             connectionManager.disconnect(deviceId)
             pairedDeviceRepository.removePairedDevice(deviceId)
-        }
-    }
-
-    fun addSamplePairedDevice() {
-        viewModelScope.launch {
-            pairedDeviceRepository.addSamplePairedDevice()
         }
     }
 

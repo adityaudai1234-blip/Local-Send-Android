@@ -6,6 +6,7 @@ import com.example.di.AppContainer
 import com.example.presentation.devices.DevicesViewModel
 import com.example.presentation.home.HomeViewModel
 import com.example.presentation.settings.SettingsViewModel
+import com.example.presentation.storage.StorageViewModel
 import com.example.presentation.transfers.TransfersViewModel
 
 class ViewModelFactory(
@@ -42,7 +43,17 @@ class ViewModelFactory(
             }
             modelClass.isAssignableFrom(SettingsViewModel::class.java) -> {
                 SettingsViewModel(
-                    settingsRepository = appContainer.settingsRepository
+                    settingsRepository = appContainer.settingsRepository,
+                    pairedDeviceRepository = appContainer.pairedDeviceRepository,
+                    storageManager = appContainer.storageManager,
+                    nsdDiscoveryManager = appContainer.nsdDiscoveryManager
+                ) as T
+            }
+            modelClass.isAssignableFrom(StorageViewModel::class.java) -> {
+                StorageViewModel(
+                    storageManager = appContainer.storageManager,
+                    settingsRepository = appContainer.settingsRepository,
+                    transferDao = appContainer.appDatabase.transferDao()
                 ) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")

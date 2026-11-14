@@ -27,6 +27,7 @@ class SettingsDataStore(private val context: Context) {
         val AUTO_ACCEPT_TRUSTED = booleanPreferencesKey("auto_accept_trusted")
         val ASK_BEFORE_RECEIVING = booleanPreferencesKey("ask_before_receiving")
         val DOWNLOAD_LOCATION = stringPreferencesKey("download_location")
+        val CUSTOM_DOWNLOAD_TREE_URI = stringPreferencesKey("custom_download_tree_uri")
         val PORT = intPreferencesKey("port")
         val BROADCAST_ENABLED = booleanPreferencesKey("broadcast_enabled")
         val SHOW_NOTIFICATIONS = booleanPreferencesKey("show_notifications")
@@ -38,6 +39,8 @@ class SettingsDataStore(private val context: Context) {
         val AUTO_OPEN_COMPLETED = booleanPreferencesKey("auto_open_completed")
         val MAX_FILE_SIZE_MB = longPreferencesKey("max_file_size_mb")
         val REQUIRE_APPROVAL_UNKNOWN = booleanPreferencesKey("require_approval_unknown")
+        val TLS_PREFERRED = booleanPreferencesKey("tls_preferred")
+        val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
     }
 
     private val defaultDeviceName: String by lazy {
@@ -80,6 +83,7 @@ class SettingsDataStore(private val context: Context) {
             autoAcceptTrusted = prefs[PreferencesKeys.AUTO_ACCEPT_TRUSTED] ?: false,
             askBeforeReceiving = prefs[PreferencesKeys.ASK_BEFORE_RECEIVING] ?: true,
             downloadLocation = prefs[PreferencesKeys.DOWNLOAD_LOCATION] ?: "Downloads/LocalDrop",
+            customDownloadTreeUri = prefs[PreferencesKeys.CUSTOM_DOWNLOAD_TREE_URI],
             port = prefs[PreferencesKeys.PORT] ?: 53317,
             broadcastEnabled = prefs[PreferencesKeys.BROADCAST_ENABLED] ?: true,
             showNotifications = prefs[PreferencesKeys.SHOW_NOTIFICATIONS] ?: true,
@@ -91,93 +95,94 @@ class SettingsDataStore(private val context: Context) {
             autoOpenCompleted = prefs[PreferencesKeys.AUTO_OPEN_COMPLETED] ?: false,
             maxAcceptedFileSizeMb = prefs[PreferencesKeys.MAX_FILE_SIZE_MB] ?: 0L,
             requireApprovalUnknown = prefs[PreferencesKeys.REQUIRE_APPROVAL_UNKNOWN] ?: true,
-            appVersion = "2.0.0 (Phase 4)",
+            tlsPreferred = prefs[PreferencesKeys.TLS_PREFERRED] ?: true,
+            hapticsEnabled = prefs[PreferencesKeys.HAPTICS_ENABLED] ?: true,
+            appVersion = "2.0.0",
             buildNumber = "4",
             protocolVersion = "v2"
         )
     }
 
     suspend fun updateDeviceName(name: String) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.DEVICE_NAME] = name.trim()
-        }
+        context.dataStore.edit { it[PreferencesKeys.DEVICE_NAME] = name.trim() }
     }
 
     suspend fun updateThemeMode(mode: ThemeMode) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.THEME_MODE] = mode.name
-        }
+        context.dataStore.edit { it[PreferencesKeys.THEME_MODE] = mode.name }
     }
 
     suspend fun updateAutoStartReceiving(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.AUTO_START_RECEIVING] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.AUTO_START_RECEIVING] = enabled }
     }
 
     suspend fun updateAutoAcceptTrusted(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.AUTO_ACCEPT_TRUSTED] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.AUTO_ACCEPT_TRUSTED] = enabled }
     }
 
     suspend fun updateAskBeforeReceiving(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.ASK_BEFORE_RECEIVING] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.ASK_BEFORE_RECEIVING] = enabled }
     }
 
-    suspend fun updateDownloadLocation(path: String) {
+    suspend fun updateDownloadLocation(path: String, treeUri: String? = null) {
         context.dataStore.edit { prefs ->
             prefs[PreferencesKeys.DOWNLOAD_LOCATION] = path
+            if (treeUri != null) {
+                prefs[PreferencesKeys.CUSTOM_DOWNLOAD_TREE_URI] = treeUri
+            } else {
+                prefs.remove(PreferencesKeys.CUSTOM_DOWNLOAD_TREE_URI)
+            }
         }
     }
 
     suspend fun updatePort(port: Int) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.PORT] = port
-        }
+        context.dataStore.edit { it[PreferencesKeys.PORT] = port }
     }
 
     suspend fun updateBroadcastEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.BROADCAST_ENABLED] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.BROADCAST_ENABLED] = enabled }
     }
 
     suspend fun updateShowNotifications(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.SHOW_NOTIFICATIONS] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.SHOW_NOTIFICATIONS] = enabled }
+    }
+
+    suspend fun updateDiscoveryIntervalSeconds(seconds: Int) {
+        context.dataStore.edit { it[PreferencesKeys.DISCOVERY_INTERVAL] = seconds.coerceIn(5, 120) }
+    }
+
+    suspend fun updateConnectionTimeoutMs(timeoutMs: Int) {
+        context.dataStore.edit { it[PreferencesKeys.CONNECTION_TIMEOUT] = timeoutMs.coerceIn(3000, 120_000) }
     }
 
     suspend fun updateMaxConcurrent(count: Int) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.MAX_CONCURRENT] = count
-        }
+        context.dataStore.edit { it[PreferencesKeys.MAX_CONCURRENT] = count.coerceIn(1, 5) }
     }
 
     suspend fun updateDuplicateHandling(handling: String) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.DUPLICATE_HANDLING] = handling
-        }
+        context.dataStore.edit { it[PreferencesKeys.DUPLICATE_HANDLING] = handling }
+    }
+
+    suspend fun updatePreserveOriginalNames(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.PRESERVE_NAMES] = enabled }
     }
 
     suspend fun updateAutoOpenCompleted(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.AUTO_OPEN_COMPLETED] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.AUTO_OPEN_COMPLETED] = enabled }
     }
 
     suspend fun updateMaxAcceptedFileSizeMb(sizeMb: Long) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.MAX_FILE_SIZE_MB] = sizeMb
-        }
+        context.dataStore.edit { it[PreferencesKeys.MAX_FILE_SIZE_MB] = sizeMb.coerceAtLeast(0L) }
     }
 
     suspend fun updateRequireApprovalUnknown(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[PreferencesKeys.REQUIRE_APPROVAL_UNKNOWN] = enabled
-        }
+        context.dataStore.edit { it[PreferencesKeys.REQUIRE_APPROVAL_UNKNOWN] = enabled }
+    }
+
+    suspend fun updateTlsPreferred(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.TLS_PREFERRED] = enabled }
+    }
+
+    suspend fun updateHapticsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.HAPTICS_ENABLED] = enabled }
     }
 }

@@ -13,6 +13,7 @@ data class AppSettings(
     val autoAcceptTrusted: Boolean = false, // Mandated: disabled by default
     val askBeforeReceiving: Boolean = true,
     val downloadLocation: String = "Downloads/LocalDrop",
+    val customDownloadTreeUri: String? = null,
     val port: Int = 53317,
     val broadcastEnabled: Boolean = true,
     val showNotifications: Boolean = true,
@@ -24,7 +25,9 @@ data class AppSettings(
     val autoOpenCompleted: Boolean = false,
     val maxAcceptedFileSizeMb: Long = 0L, // 0L = unlimited
     val requireApprovalUnknown: Boolean = true,
-    val appVersion: String = "2.0.0 (Phase 4)",
+    val tlsPreferred: Boolean = true,
+    val hapticsEnabled: Boolean = true,
+    val appVersion: String = "2.0.0",
     val buildNumber: String = "4",
     val protocolVersion: String = "v2"
 )

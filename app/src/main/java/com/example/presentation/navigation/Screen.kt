@@ -46,6 +46,12 @@ sealed class Screen(
     )
 
     companion object {
+        const val ROUTE_TRANSFER_DETAILS = "transfer_details/{transferId}"
+        const val ROUTE_TRUSTED_DEVICES = "trusted_devices"
+        const val ROUTE_STORAGE_MANAGEMENT = "storage_management"
+
+        fun transferDetailsRoute(transferId: String): String = "transfer_details/$transferId"
+
         val bottomNavItems: List<Screen>
             get() = listOf(Home, Devices, Transfers, Settings)
     }

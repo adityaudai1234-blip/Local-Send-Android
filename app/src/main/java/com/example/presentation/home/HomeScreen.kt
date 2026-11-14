@@ -207,27 +207,15 @@ fun HomeScreen(
                     PulseScanningIndicator(isScanning = isScanning)
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (discoveredDevices.isEmpty()) {
-                        OutlinedButton(
-                            onClick = { viewModel.addTestPeer() },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Text("+ Add Test Peer", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-                    Text(
-                        text = "View All (${discoveredDevices.size})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clickable(onClick = onNavigateToDevices)
-                            .padding(4.dp)
-                    )
-                }
+                Text(
+                    text = "View All (${discoveredDevices.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable(onClick = onNavigateToDevices)
+                        .padding(4.dp)
+                )
             }
         }
 

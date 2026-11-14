@@ -10,6 +10,7 @@ interface PairedDeviceRepository {
     suspend fun savePairedDevice(device: PairedDevice, rawAuthToken: String)
     suspend fun getAuthToken(deviceId: String): String?
     suspend fun removePairedDevice(id: String)
+    suspend fun renameDevice(id: String, newAlias: String)
     suspend fun updateLastConnected(id: String)
-    suspend fun addSamplePairedDevice()
+    suspend fun clearAllDevices()
 }

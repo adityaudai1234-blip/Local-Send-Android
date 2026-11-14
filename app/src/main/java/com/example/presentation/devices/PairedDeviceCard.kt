@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
@@ -39,9 +40,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.network.ConnectionState
 import com.example.domain.model.PairedDevice
 import com.example.presentation.components.ConnectionStatusBadge
-import com.example.presentation.components.StatusBadge
 import com.example.ui.theme.CyanAccent
-import com.example.ui.theme.StatusSuccess
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +53,7 @@ fun PairedDeviceCard(
     onDisconnectClick: () -> Unit,
     onDetailsClick: () -> Unit,
     onRemoveClick: () -> Unit,
+    onRenameClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isConnected = connectionState is ConnectionState.Connected
@@ -85,7 +85,6 @@ fun PairedDeviceCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Device Icon
                 Box(
                     modifier = Modifier
                         .size(46.dp)
@@ -103,7 +102,6 @@ fun PairedDeviceCard(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Name and Subtitle
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -142,13 +140,11 @@ fun PairedDeviceCard(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Connection status badge
                 ConnectionStatusBadge(state = connectionState)
             }
 
             Spacer(modifier = Modifier.size(10.dp))
 
-            // Action row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -188,10 +184,26 @@ fun PairedDeviceCard(
                 }
 
                 Row {
+                    if (onRenameClick != null) {
+                        IconButton(
+                            onClick = onRenameClick,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("rename_device_button_${device.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Rename device",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
                     IconButton(
                         onClick = onDetailsClick,
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(48.dp)
                             .testTag("device_details_button_${device.id}")
                     ) {
                         Icon(
@@ -205,7 +217,7 @@ fun PairedDeviceCard(
                     IconButton(
                         onClick = onRemoveClick,
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(48.dp)
                             .testTag("unpair_button_${device.id}")
                     ) {
                         Icon(

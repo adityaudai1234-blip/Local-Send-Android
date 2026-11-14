@@ -4,12 +4,21 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.FileInputStream
 import java.util.Locale
 
 class StorageManager(private val context: Context) {
+
+    @Volatile
+    private var customTreeUri: String? = null
+
+    fun setCustomDownloadTreeUri(uriString: String?) {
+        customTreeUri = uriString
+    }
 
     private val downloadsDir: File
         get() {
@@ -18,7 +27,6 @@ class StorageManager(private val context: Context) {
             if (!localDropDir.exists()) {
                 val created = localDropDir.mkdirs()
                 if (!created) {
-                    // Fallback to app-specific external files dir
                     return context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                         ?: context.filesDir
                 }
@@ -36,12 +44,39 @@ class StorageManager(private val context: Context) {
     fun getDownloadDirectory(): File = downloadsDir
 
     fun createTempFile(fileId: String): File {
-        return File(tempDir, "incoming_$fileId.tmp")
+        val safeId = fileId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        return File(tempDir, "incoming_$safeId.tmp")
+    }
+
+    sealed interface DestinationResolution {
+        data class Ready(val file: File) : DestinationResolution
+        data object Skipped : DestinationResolution
     }
 
     /**
-     * Resolves duplicate filenames by appending " (1)", " (2)", etc.
+     * Resolves duplicate filenames according to user preference ("rename", "overwrite", "skip").
      */
+    fun resolveDestinationWithPolicy(fileName: String, duplicateHandling: String): DestinationResolution {
+        val sanitized = FileMetadata.sanitizeFileName(fileName)
+        val baseDir = downloadsDir
+        val target = File(baseDir, sanitized)
+
+        val canonicalBase = baseDir.canonicalPath
+        if (!target.canonicalPath.startsWith(canonicalBase)) {
+            throw SecurityException("Invalid destination path rejected")
+        }
+
+        if (!target.exists()) {
+            return DestinationResolution.Ready(target)
+        }
+
+        return when (duplicateHandling.lowercase(Locale.ROOT)) {
+            "overwrite" -> DestinationResolution.Ready(target)
+            "skip" -> DestinationResolution.Skipped
+            else -> DestinationResolution.Ready(resolveUniqueDestinationFile(sanitized))
+        }
+    }
+
     fun resolveUniqueDestinationFile(fileName: String): File {
         val sanitized = FileMetadata.sanitizeFileName(fileName)
         val target = File(downloadsDir, sanitized)
@@ -61,20 +96,50 @@ class StorageManager(private val context: Context) {
     }
 
     /**
-     * Moves a verified temporary file to the final destination file.
+     * Moves a verified temporary file to the final destination file,
+     * or writes into the user's SAF tree URI if configured.
      */
-    fun finalizeReceivedFile(tempFile: File, destinationFile: File): Boolean {
+    fun finalizeReceivedFile(
+        tempFile: File,
+        destinationFile: File,
+        mimeType: String = "application/octet-stream"
+    ): String? {
+        val customUriStr = customTreeUri
+        if (!customUriStr.isNullOrBlank()) {
+            try {
+                val treeUri = Uri.parse(customUriStr)
+                val parentDocId = DocumentsContract.getTreeDocumentId(treeUri)
+                val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, parentDocId)
+                val createdUri = DocumentsContract.createDocument(
+                    context.contentResolver,
+                    parentDocUri,
+                    mimeType,
+                    destinationFile.name
+                )
+                if (createdUri != null) {
+                    context.contentResolver.openOutputStream(createdUri)?.use { out ->
+                        FileInputStream(tempFile).use { input ->
+                            input.copyTo(out, bufferSize = 64 * 1024)
+                        }
+                    }
+                    tempFile.delete()
+                    return createdUri.toString()
+                }
+            } catch (_: Exception) {
+                // Fall back to standard downloadsDir below
+            }
+        }
+
         return try {
             if (destinationFile.exists()) destinationFile.delete()
             val renamed = tempFile.renameTo(destinationFile)
             if (!renamed) {
-                // If renameTo fails across mounts, copy and delete
                 tempFile.copyTo(destinationFile, overwrite = true)
                 tempFile.delete()
             }
-            true
+            destinationFile.absolutePath
         } catch (_: Exception) {
-            false
+            null
         }
     }
 
@@ -91,6 +156,45 @@ class StorageManager(private val context: Context) {
             ?: emptyList()
     }
 
+    fun openFilePath(pathOrUri: String) {
+        if (pathOrUri.startsWith("content://")) {
+            try {
+                val uri = Uri.parse(pathOrUri)
+                val mime = context.contentResolver.getType(uri) ?: "*/*"
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {}
+        } else {
+            val file = File(pathOrUri)
+            if (file.exists()) openFile(file)
+        }
+    }
+
+    fun shareFilePath(pathOrUri: String, displayName: String) {
+        if (pathOrUri.startsWith("content://")) {
+            try {
+                val uri = Uri.parse(pathOrUri)
+                val mime = context.contentResolver.getType(uri) ?: "*/*"
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val chooser = Intent.createChooser(intent, "Share $displayName").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (_: Exception) {}
+        } else {
+            val file = File(pathOrUri)
+            if (file.exists()) shareFile(file)
+        }
+    }
+
     fun openFile(file: File) {
         try {
             val uri = getFileUri(file)
@@ -101,8 +205,7 @@ class StorageManager(private val context: Context) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
-        } catch (e: Exception) {
-            // Fallback to generic chooser
+        } catch (_: Exception) {
             try {
                 val uri = getFileUri(file)
                 val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -139,6 +242,19 @@ class StorageManager(private val context: Context) {
         }
     }
 
+    fun deleteFilePath(pathOrUri: String?): Boolean {
+        if (pathOrUri.isNullOrBlank()) return false
+        return try {
+            if (pathOrUri.startsWith("content://")) {
+                DocumentsContract.deleteDocument(context.contentResolver, Uri.parse(pathOrUri))
+            } else {
+                File(pathOrUri).delete()
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun getFileUri(file: File): Uri {
         return FileProvider.getUriForFile(
             context,
@@ -154,7 +270,7 @@ class StorageManager(private val context: Context) {
 
     fun hasAvailableStorage(bytesRequired: Long): Boolean {
         return try {
-            downloadsDir.usableSpace > bytesRequired + (50 * 1024 * 1024) // 50MB safety cushion
+            downloadsDir.usableSpace > bytesRequired + (50L * 1024L * 1024L)
         } catch (_: Exception) {
             true
         }

@@ -19,8 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -57,12 +57,20 @@ class NsdDiscoveryManager(
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
 
-    // Sequential resolve queue to prevent NsdManager "FAILURE_ALREADY_ACTIVE" error
     private val resolveQueue = Channel<NsdServiceInfo>(Channel.UNLIMITED)
     private var resolveWorkerJob: Job? = null
+    private var periodicCleanupJob: Job? = null
+
+    @Volatile
+    private var discoveryIntervalSeconds: Int = 10
 
     init {
         startResolveWorker()
+        startStaleDeviceCleanupWorker()
+    }
+
+    fun updateDiscoveryInterval(seconds: Int) {
+        discoveryIntervalSeconds = seconds.coerceIn(5, 120)
     }
 
     private fun startResolveWorker() {
@@ -70,7 +78,29 @@ class NsdDiscoveryManager(
         resolveWorkerJob = scope.launch {
             for (serviceInfo in resolveQueue) {
                 resolveSingleService(serviceInfo)
-                delay(250) // gentle throttle between resolutions
+                delay(250)
+            }
+        }
+    }
+
+    private fun startStaleDeviceCleanupWorker() {
+        periodicCleanupJob?.cancel()
+        periodicCleanupJob = scope.launch {
+            while (isActive) {
+                delay((discoveryIntervalSeconds.coerceAtLeast(10)) * 1000L)
+                val staleThreshold = System.currentTimeMillis() - (discoveryIntervalSeconds * 6_000L)
+                var removed = false
+                val iter = deviceMap.entries.iterator()
+                while (iter.hasNext()) {
+                    val entry = iter.next()
+                    if (entry.value.lastSeen < staleThreshold && !entry.value.id.startsWith("tauri-")) {
+                        iter.remove()
+                        removed = true
+                    }
+                }
+                if (removed) {
+                    _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+                }
             }
         }
     }
@@ -93,24 +123,19 @@ class NsdDiscoveryManager(
                 }
 
                 override fun onServiceFound(service: NsdServiceInfo) {
-                    Log.d(TAG, "Service found: ${service.serviceName}, type: ${service.serviceType}")
                     val registeredName = _registeredServiceName.value
                     if (registeredName != null && service.serviceName.contains(registeredName)) {
-                        // Skip self
                         return
                     }
                     resolveQueue.trySend(service)
                 }
 
                 override fun onServiceLost(service: NsdServiceInfo) {
-                    Log.d(TAG, "Service lost: ${service.serviceName}")
-                    val key = service.serviceName
-                    deviceMap.remove(key)
-                    _discoveredDevices.update { deviceMap.values.toList() }
+                    deviceMap.remove(service.serviceName)
+                    _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
                 }
 
                 override fun onDiscoveryStopped(serviceType: String) {
-                    Log.d(TAG, "Discovery stopped: $serviceType")
                     _isScanning.value = false
                 }
 
@@ -122,7 +147,6 @@ class NsdDiscoveryManager(
                 }
 
                 override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                    Log.e(TAG, "Stop discovery failed: $errorCode")
                     _isScanning.value = false
                 }
             }
@@ -137,10 +161,11 @@ class NsdDiscoveryManager(
             Log.e(TAG, "Error starting discovery", e)
             _error.value = "Failed to start discovery: ${e.localizedMessage}"
             _isScanning.value = false
+            releaseMulticastLock()
         }
     }
 
-    private suspend fun resolveSingleService(serviceInfo: NsdServiceInfo) {
+    private fun resolveSingleService(serviceInfo: NsdServiceInfo) {
         val manager = nsdManager ?: return
         val currentRegistered = _registeredServiceName.value
 
@@ -151,16 +176,13 @@ class NsdDiscoveryManager(
                 }
 
                 override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
-                    Log.d(TAG, "Service resolved: ${resolvedInfo.serviceName} at ${resolvedInfo.host}:${resolvedInfo.port}")
                     val hostAddress = resolvedInfo.host?.hostAddress ?: ""
                     val localIp = NetworkUtils.getLocalIpv4Address() ?: ""
 
                     val isSelf = (currentRegistered != null && resolvedInfo.serviceName.contains(currentRegistered)) ||
                             (hostAddress.isNotEmpty() && hostAddress == localIp)
 
-                    if (isSelf) {
-                        return
-                    }
+                    if (isSelf) return
 
                     val attributes = parseAttributes(resolvedInfo)
                     val alias = attributes[DiscoveryProtocol.KEY_ALIAS]?.takeIf { it.isNotBlank() }
@@ -219,7 +241,7 @@ class NsdDiscoveryManager(
         } finally {
             discoveryListener = null
             _isScanning.value = false
-            releaseMulticastLock()
+            releaseMulticastLockIfIdle()
         }
     }
 
@@ -244,28 +266,27 @@ class NsdDiscoveryManager(
                 setPort(port)
                 setAttribute(DiscoveryProtocol.KEY_ALIAS, alias)
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_TYPE, "android")
-                setAttribute(DiscoveryProtocol.KEY_VERSION, "1.0.0")
+                setAttribute(DiscoveryProtocol.KEY_VERSION, "2.0.0")
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_MODEL, "${Build.MANUFACTURER} ${Build.MODEL}")
                 setAttribute(DiscoveryProtocol.KEY_PROTOCOL, DiscoveryProtocol.PROTOCOL_VERSION)
             }
 
             val listener = object : NsdManager.RegistrationListener {
                 override fun onServiceRegistered(registeredInfo: NsdServiceInfo) {
-                    Log.d(TAG, "Service registered: ${registeredInfo.serviceName}")
                     _registeredServiceName.value = registeredInfo.serviceName
                     _isAdvertising.value = true
                 }
 
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                    Log.e(TAG, "Registration failed: $errorCode")
                     _isAdvertising.value = false
                     _error.value = "Failed to broadcast device: code $errorCode"
+                    releaseMulticastLockIfIdle()
                 }
 
                 override fun onServiceUnregistered(arg0: NsdServiceInfo) {
-                    Log.d(TAG, "Service unregistered")
                     _isAdvertising.value = false
                     _registeredServiceName.value = null
+                    releaseMulticastLockIfIdle()
                 }
 
                 override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
@@ -279,6 +300,7 @@ class NsdDiscoveryManager(
             Log.e(TAG, "Error registering service", e)
             _error.value = "Broadcast error: ${e.localizedMessage}"
             _isAdvertising.value = false
+            releaseMulticastLockIfIdle()
         }
     }
 
@@ -293,13 +315,10 @@ class NsdDiscoveryManager(
             registrationListener = null
             _isAdvertising.value = false
             _registeredServiceName.value = null
-            releaseMulticastLock()
+            releaseMulticastLockIfIdle()
         }
     }
 
-    /**
-     * Injects a local test peer for quick developer testing when in isolated emulator networks.
-     */
     fun addSimulatedPeer(device: Device) {
         deviceMap[device.id] = device
         _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
@@ -323,9 +342,15 @@ class NsdDiscoveryManager(
         }
     }
 
+    private fun releaseMulticastLockIfIdle() {
+        if (!_isScanning.value && !_isAdvertising.value) {
+            releaseMulticastLock()
+        }
+    }
+
     private fun releaseMulticastLock() {
         try {
-            if (multicastLock?.isHeld == true) {
+            while (multicastLock?.isHeld == true) {
                 multicastLock?.release()
             }
         } catch (e: Exception) {
@@ -336,6 +361,8 @@ class NsdDiscoveryManager(
     fun cleanup() {
         stopDiscovery()
         stopAdvertising()
+        releaseMulticastLock()
         resolveWorkerJob?.cancel()
+        periodicCleanupJob?.cancel()
     }
 }

@@ -18,7 +18,7 @@
     <string name="scan_network">Scan Network</string>
     <string name="scanning">Scanning…</string>
     <string name="qr_pair_title">Quick QR Pairing</string>
-    <string name="qr_pair_desc">Pair quickly with desktop or mobile devices using a QR code (Coming in Phase 2)</string>
+    <string name="qr_pair_desc">Pair quickly with desktop or mobile devices using a QR code</string>
     
     <string name="no_devices_found">No devices found</string>
     <string name="no_devices_hint">Make sure both devices are connected to the same Wi-Fi or local network.</string>
