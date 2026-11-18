@@ -10,7 +10,11 @@ data class PairedDevice(
     val pairedAt: Long = System.currentTimeMillis(),
     val lastConnectedAt: Long = System.currentTimeMillis(),
     val model: String? = null,
-    val isConnected: Boolean = false
+    val isConnected: Boolean = false,
+    val isFavorite: Boolean = false,
+    val useCount: Int = 0,
+    val lastTransferredAt: Long = 0L,
+    val autoAccept: Boolean = false
 ) {
     val displaySubtitle: String
         get() = "$ipAddress:$port"

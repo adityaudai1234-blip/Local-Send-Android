@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.security.SecurityValidator
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.ThemeMode
 
 @Composable
@@ -90,6 +91,32 @@ fun ThemeSelectionDialog(
                 SettingsOptionRow("Dark Theme", currentMode == ThemeMode.DARK) {
                     onSelect(ThemeMode.DARK)
                     onDismiss()
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+fun AccentColorSelectionDialog(
+    currentAccent: AccentColorOption,
+    onSelect: (AccentColorOption) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accent Palette") },
+        text = {
+            Column {
+                AccentColorOption.entries.forEach { option ->
+                    SettingsOptionRow(option.label, currentAccent == option) {
+                        onSelect(option)
+                        onDismiss()
+                    }
                 }
             }
         },

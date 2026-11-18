@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.discovery.NsdDiscoveryManager
 import com.example.data.transfer.StorageManager
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
 import com.example.domain.repository.PairedDeviceRepository
@@ -69,6 +70,7 @@ class SettingsViewModel(
 
     fun updateDeviceName(name: String) = viewModelScope.launch { settingsRepository.setDeviceName(name) }
     fun updateThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepository.setThemeMode(mode) }
+    fun updateAccentColor(option: AccentColorOption) = viewModelScope.launch { settingsRepository.setAccentColor(option) }
     fun updateAutoStartReceiving(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoStartReceiving(enabled) }
     fun updateAutoAcceptTrusted(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoAcceptTrusted(enabled) }
     fun updateAskBeforeReceiving(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAskBeforeReceiving(enabled) }
@@ -98,6 +100,11 @@ class SettingsViewModel(
     fun updateRequireApprovalUnknown(enabled: Boolean) = viewModelScope.launch { settingsRepository.setRequireApprovalUnknown(enabled) }
     fun updateTlsPreferred(enabled: Boolean) = viewModelScope.launch { settingsRepository.setTlsPreferred(enabled) }
     fun updateHapticsEnabled(enabled: Boolean) = viewModelScope.launch { settingsRepository.setHapticsEnabled(enabled) }
+    fun updateTransferBufferSizeKb(sizeKb: Int) = viewModelScope.launch { settingsRepository.setTransferBufferSizeKb(sizeKb) }
+    fun updateSuggestRecentDevices(enabled: Boolean) = viewModelScope.launch { settingsRepository.setSuggestRecentDevices(enabled) }
+    fun updateRememberLastDestination(enabled: Boolean) = viewModelScope.launch { settingsRepository.setRememberLastDestination(enabled) }
+    fun updateOrganizeReceivedByType(enabled: Boolean) = viewModelScope.launch { settingsRepository.setOrganizeReceivedByType(enabled) }
+    fun updateAutoCleanTempFiles(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoCleanTempFiles(enabled) }
 
     fun clearTempFiles(onResult: (Int) -> Unit) {
         viewModelScope.launch {

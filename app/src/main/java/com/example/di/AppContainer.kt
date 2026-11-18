@@ -92,7 +92,9 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     override val connectionManager: ConnectionManager by lazy {
         ConnectionManager(
             client = tcpClient,
-            myDeviceIdProvider = { deviceId }
+            myDeviceIdProvider = { deviceId },
+            context = context,
+            pairedDeviceRepository = pairedDeviceRepository
         )
     }
 
@@ -144,6 +146,12 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             } else {
                 pairingManager.handleIncomingMessage(message)
             }
+        }
+        connectionManager.onConnectionStateChanged = {
+            com.example.widget.WidgetUpdateHelper.requestUpdateAll(context)
+        }
+        transferManager.onStateChangedListener = {
+            com.example.widget.WidgetUpdateHelper.requestUpdateAll(context)
         }
     }
 }

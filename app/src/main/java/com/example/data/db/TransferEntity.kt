@@ -25,5 +25,8 @@ data class TransferEntity(
     val peerDeviceName: String = "",
     val peerAddress: String = "",
     val errorMessage: String? = null,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val relativePath: String? = null,
+    val avgSpeedBytesPerSec: Long = 0L,
+    val peakSpeedBytesPerSec: Long = 0L
 )

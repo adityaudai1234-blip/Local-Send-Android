@@ -18,26 +18,33 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.FolderCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Gavel
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapCalls
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Wifi
@@ -80,6 +87,9 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onNavigateToTrustedDevices: () -> Unit = {},
     onNavigateToStorageManagement: () -> Unit = {},
+    onNavigateToReceivedFiles: () -> Unit = {},
+    onNavigateToDiagnostics: () -> Unit = {},
+    onNavigateToPrivacyDashboard: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings by viewModel.settings.collectAsState()
@@ -96,10 +106,12 @@ fun SettingsScreen(
 
     var showEditNameDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showAccentDialog by remember { mutableStateOf(false) }
     var showPortDialog by remember { mutableStateOf(false) }
     var showDiscoveryIntervalDialog by remember { mutableStateOf(false) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var showConcurrentDialog by remember { mutableStateOf(false) }
+    var showBufferSizeDialog by remember { mutableStateOf(false) }
     var showDuplicateDialog by remember { mutableStateOf(false) }
     var showMaxSizeDialog by remember { mutableStateOf(false) }
     var showClearCredentialsDialog by remember { mutableStateOf(false) }
@@ -141,6 +153,14 @@ fun SettingsScreen(
                         },
                         onClick = { showThemeDialog = true },
                         modifier = Modifier.testTag("setting_theme")
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Default.Tune,
+                        title = "Accent Color",
+                        subtitle = settings.accentColor.label,
+                        onClick = { showAccentDialog = true },
+                        modifier = Modifier.testTag("setting_accent_color")
                     )
                     SettingsDivider()
                     SettingsToggleRow(
@@ -207,9 +227,17 @@ fun SettingsScreen(
                         subtitle = networkSummary,
                         onClick = {
                             viewModel.refreshDiagnostics()
-                            scope.launch { snackbarHostState.showSnackbar("Network diagnostics refreshed") }
+                            scope.launch { snackbarHostState.showSnackbar("Network status refreshed") }
                         },
                         modifier = Modifier.testTag("setting_network_info")
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Default.NetworkCheck,
+                        title = "Network Diagnostics & Latency",
+                        subtitle = "Live status, port availability, ping tests & error log",
+                        onClick = onNavigateToDiagnostics,
+                        modifier = Modifier.testTag("setting_network_diagnostics")
                     )
                 }
             }
@@ -257,6 +285,14 @@ fun SettingsScreen(
                     )
                     SettingsDivider()
                     SettingsRow(
+                        icon = Icons.Default.Memory,
+                        title = "Transfer Buffer Size",
+                        subtitle = "${settings.transferBufferSizeKb} KB streaming chunks",
+                        onClick = { showBufferSizeDialog = true },
+                        modifier = Modifier.testTag("setting_buffer_size")
+                    )
+                    SettingsDivider()
+                    SettingsRow(
                         icon = Icons.Default.Description,
                         title = "Max Accepted File Size",
                         subtitle = if (settings.maxAcceptedFileSizeMb <= 0L) "Unlimited" else "${settings.maxAcceptedFileSizeMb} MB",
@@ -266,10 +302,60 @@ fun SettingsScreen(
                 }
             }
 
+            // 3B. WORKFLOW AUTOMATION (Opt-in preferences)
+            item { SectionHeader(title = "Automation") }
+            item {
+                SettingsCard {
+                    SettingsToggleRow(
+                        icon = Icons.Default.Bolt,
+                        title = "Suggest Quick Send Devices",
+                        subtitle = "Show recent and frequently used peers on Home",
+                        checked = settings.suggestRecentDevices,
+                        onCheckedChange = { viewModel.updateSuggestRecentDevices(it) },
+                        modifier = Modifier.testTag("switch_suggest_recent")
+                    )
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Default.History,
+                        title = "Remember Last Destination",
+                        subtitle = "Pre-highlight last peer when choosing recipients",
+                        checked = settings.rememberLastDestination,
+                        onCheckedChange = { viewModel.updateRememberLastDestination(it) },
+                        modifier = Modifier.testTag("switch_remember_destination")
+                    )
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Default.FolderCopy,
+                        title = "Organize Received Files by Type",
+                        subtitle = "Sort incoming files into Images, Videos, Audio, Documents",
+                        checked = settings.organizeReceivedByType,
+                        onCheckedChange = { viewModel.updateOrganizeReceivedByType(it) },
+                        modifier = Modifier.testTag("switch_organize_by_type")
+                    )
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Default.CleaningServices,
+                        title = "Auto-Clean Temporary Cache",
+                        subtitle = "Purge incomplete temp chunks automatically on launch",
+                        checked = settings.autoCleanTempFiles,
+                        onCheckedChange = { viewModel.updateAutoCleanTempFiles(it) },
+                        modifier = Modifier.testTag("switch_auto_clean_temp")
+                    )
+                }
+            }
+
             // 4. STORAGE
             item { SectionHeader(title = "Storage") }
             item {
                 SettingsCard {
+                    SettingsRow(
+                        icon = Icons.Default.FolderOpen,
+                        title = "Received Files Browser",
+                        subtitle = "Filter by category, search, preview & share",
+                        onClick = onNavigateToReceivedFiles,
+                        modifier = Modifier.testTag("setting_received_files_browser")
+                    )
+                    SettingsDivider()
                     SettingsRow(
                         icon = Icons.Default.FolderOpen,
                         title = "Download Location",
@@ -349,6 +435,14 @@ fun SettingsScreen(
                         checked = settings.autoStartReceiving,
                         onCheckedChange = { viewModel.updateAutoStartReceiving(it) },
                         modifier = Modifier.testTag("switch_auto_start")
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        icon = Icons.Default.PrivacyTip,
+                        title = "Privacy Dashboard",
+                        subtitle = "Inspect active sessions, broadcast & wipe stored data",
+                        onClick = onNavigateToPrivacyDashboard,
+                        modifier = Modifier.testTag("setting_privacy_dashboard")
                     )
                     SettingsDivider()
                     SettingsRow(
@@ -438,6 +532,23 @@ fun SettingsScreen(
             currentMode = settings.themeMode,
             onSelect = { viewModel.updateThemeMode(it) },
             onDismiss = { showThemeDialog = false }
+        )
+    }
+    if (showAccentDialog) {
+        AccentColorSelectionDialog(
+            currentAccent = settings.accentColor,
+            onSelect = { viewModel.updateAccentColor(it) },
+            onDismiss = { showAccentDialog = false }
+        )
+    }
+    if (showBufferSizeDialog) {
+        SingleChoiceDialog(
+            title = "Transfer Buffer Size",
+            selectedLabel = "${settings.transferBufferSizeKb} KB",
+            options = listOf(32, 64, 128, 256).map { kb ->
+                "$kb KB" to { viewModel.updateTransferBufferSizeKb(kb) }
+            },
+            onDismiss = { showBufferSizeDialog = false }
         )
     }
     if (showPortDialog) {

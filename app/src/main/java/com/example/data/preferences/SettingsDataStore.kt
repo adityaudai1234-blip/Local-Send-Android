@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,7 @@ class SettingsDataStore(private val context: Context) {
         val DEVICE_ID = stringPreferencesKey("device_id")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val ACCENT_COLOR = stringPreferencesKey("accent_color")
         val AUTO_START_RECEIVING = booleanPreferencesKey("auto_start_receiving")
         val AUTO_ACCEPT_TRUSTED = booleanPreferencesKey("auto_accept_trusted")
         val ASK_BEFORE_RECEIVING = booleanPreferencesKey("ask_before_receiving")
@@ -34,6 +36,7 @@ class SettingsDataStore(private val context: Context) {
         val DISCOVERY_INTERVAL = intPreferencesKey("discovery_interval")
         val CONNECTION_TIMEOUT = intPreferencesKey("connection_timeout")
         val MAX_CONCURRENT = intPreferencesKey("max_concurrent")
+        val TRANSFER_BUFFER_SIZE_KB = intPreferencesKey("transfer_buffer_size_kb")
         val DUPLICATE_HANDLING = stringPreferencesKey("duplicate_handling")
         val PRESERVE_NAMES = booleanPreferencesKey("preserve_names")
         val AUTO_OPEN_COMPLETED = booleanPreferencesKey("auto_open_completed")
@@ -41,6 +44,11 @@ class SettingsDataStore(private val context: Context) {
         val REQUIRE_APPROVAL_UNKNOWN = booleanPreferencesKey("require_approval_unknown")
         val TLS_PREFERRED = booleanPreferencesKey("tls_preferred")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
+        val SUGGEST_RECENT_DEVICES = booleanPreferencesKey("suggest_recent_devices")
+        val REMEMBER_LAST_DESTINATION = booleanPreferencesKey("remember_last_destination")
+        val LAST_DESTINATION_DEVICE_ID = stringPreferencesKey("last_destination_device_id")
+        val ORGANIZE_RECEIVED_BY_TYPE = booleanPreferencesKey("organize_received_by_type")
+        val AUTO_CLEAN_TEMP_FILES = booleanPreferencesKey("auto_clean_temp_files")
     }
 
     private val defaultDeviceName: String by lazy {
@@ -76,9 +84,17 @@ class SettingsDataStore(private val context: Context) {
             ThemeMode.SYSTEM
         }
 
+        val accentStr = prefs[PreferencesKeys.ACCENT_COLOR] ?: AccentColorOption.TEAL.name
+        val accentColor = try {
+            AccentColorOption.valueOf(accentStr)
+        } catch (_: Exception) {
+            AccentColorOption.TEAL
+        }
+
         AppSettings(
             deviceName = prefs[PreferencesKeys.DEVICE_NAME] ?: defaultDeviceName,
             themeMode = themeMode,
+            accentColor = accentColor,
             autoStartReceiving = prefs[PreferencesKeys.AUTO_START_RECEIVING] ?: false,
             autoAcceptTrusted = prefs[PreferencesKeys.AUTO_ACCEPT_TRUSTED] ?: false,
             askBeforeReceiving = prefs[PreferencesKeys.ASK_BEFORE_RECEIVING] ?: true,
@@ -90,6 +106,7 @@ class SettingsDataStore(private val context: Context) {
             discoveryIntervalSeconds = prefs[PreferencesKeys.DISCOVERY_INTERVAL] ?: 10,
             connectionTimeoutMs = prefs[PreferencesKeys.CONNECTION_TIMEOUT] ?: 15000,
             maxConcurrentTransfers = prefs[PreferencesKeys.MAX_CONCURRENT] ?: 2,
+            transferBufferSizeKb = prefs[PreferencesKeys.TRANSFER_BUFFER_SIZE_KB] ?: 64,
             duplicateHandling = prefs[PreferencesKeys.DUPLICATE_HANDLING] ?: "rename",
             preserveOriginalNames = prefs[PreferencesKeys.PRESERVE_NAMES] ?: true,
             autoOpenCompleted = prefs[PreferencesKeys.AUTO_OPEN_COMPLETED] ?: false,
@@ -97,8 +114,13 @@ class SettingsDataStore(private val context: Context) {
             requireApprovalUnknown = prefs[PreferencesKeys.REQUIRE_APPROVAL_UNKNOWN] ?: true,
             tlsPreferred = prefs[PreferencesKeys.TLS_PREFERRED] ?: true,
             hapticsEnabled = prefs[PreferencesKeys.HAPTICS_ENABLED] ?: true,
-            appVersion = "2.0.0",
-            buildNumber = "4",
+            suggestRecentDevices = prefs[PreferencesKeys.SUGGEST_RECENT_DEVICES] ?: true,
+            rememberLastDestination = prefs[PreferencesKeys.REMEMBER_LAST_DESTINATION] ?: true,
+            lastDestinationDeviceId = prefs[PreferencesKeys.LAST_DESTINATION_DEVICE_ID],
+            organizeReceivedByType = prefs[PreferencesKeys.ORGANIZE_RECEIVED_BY_TYPE] ?: false,
+            autoCleanTempFiles = prefs[PreferencesKeys.AUTO_CLEAN_TEMP_FILES] ?: true,
+            appVersion = "2.1.0",
+            buildNumber = "5",
             protocolVersion = "v2"
         )
     }
@@ -109,6 +131,10 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[PreferencesKeys.THEME_MODE] = mode.name }
+    }
+
+    suspend fun updateAccentColor(option: AccentColorOption) {
+        context.dataStore.edit { it[PreferencesKeys.ACCENT_COLOR] = option.name }
     }
 
     suspend fun updateAutoStartReceiving(enabled: Boolean) {
@@ -158,6 +184,12 @@ class SettingsDataStore(private val context: Context) {
         context.dataStore.edit { it[PreferencesKeys.MAX_CONCURRENT] = count.coerceIn(1, 5) }
     }
 
+    suspend fun updateTransferBufferSizeKb(sizeKb: Int) {
+        val allowed = listOf(32, 64, 128, 256)
+        val safe = if (sizeKb in allowed) sizeKb else 64
+        context.dataStore.edit { it[PreferencesKeys.TRANSFER_BUFFER_SIZE_KB] = safe }
+    }
+
     suspend fun updateDuplicateHandling(handling: String) {
         context.dataStore.edit { it[PreferencesKeys.DUPLICATE_HANDLING] = handling }
     }
@@ -184,5 +216,31 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateHapticsEnabled(enabled: Boolean) {
         context.dataStore.edit { it[PreferencesKeys.HAPTICS_ENABLED] = enabled }
+    }
+
+    suspend fun updateSuggestRecentDevices(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.SUGGEST_RECENT_DEVICES] = enabled }
+    }
+
+    suspend fun updateRememberLastDestination(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.REMEMBER_LAST_DESTINATION] = enabled }
+    }
+
+    suspend fun updateLastDestinationDeviceId(deviceId: String?) {
+        context.dataStore.edit { prefs ->
+            if (deviceId.isNullOrBlank()) {
+                prefs.remove(PreferencesKeys.LAST_DESTINATION_DEVICE_ID)
+            } else {
+                prefs[PreferencesKeys.LAST_DESTINATION_DEVICE_ID] = deviceId
+            }
+        }
+    }
+
+    suspend fun updateOrganizeReceivedByType(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.ORGANIZE_RECEIVED_BY_TYPE] = enabled }
+    }
+
+    suspend fun updateAutoCleanTempFiles(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.AUTO_CLEAN_TEMP_FILES] = enabled }
     }
 }

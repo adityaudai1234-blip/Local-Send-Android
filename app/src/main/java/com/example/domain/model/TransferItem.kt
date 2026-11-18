@@ -51,7 +51,10 @@ data class TransferItem(
     val completionTime: Long = timestamp,
     val durationMs: Long = 0L,
     val checksum: String? = null,
-    val fileExtension: String = fileName.substringAfterLast('.', "")
+    val fileExtension: String = fileName.substringAfterLast('.', ""),
+    val relativePath: String? = null,
+    val avgSpeedBytesPerSec: Long = 0L,
+    val peakSpeedBytesPerSec: Long = 0L
 ) {
     val category: TransferCategory
         get() = when (status) {

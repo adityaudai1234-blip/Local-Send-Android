@@ -9,7 +9,13 @@ val TealLight = Color(0xFF64FFDA)
 
 val CyanAccent = Color(0xFF0EA5E9)
 val CyanAccentDark = Color(0xFF0284C7)
+val CyanAccentLight = Color(0xFF7DD3FC)
 val IndigoAccent = Color(0xFF6366F1)
+val IndigoAccentDark = Color(0xFF4F46E5)
+val IndigoAccentLight = Color(0xFFA5B4FC)
+val EmeraldAccent = Color(0xFF10B981)
+val EmeraldAccentDark = Color(0xFF059669)
+val EmeraldAccentLight = Color(0xFF6EE7B7)
 
 // Dark Theme Colors
 val DarkBackground = Color(0xFF0A0F1D)

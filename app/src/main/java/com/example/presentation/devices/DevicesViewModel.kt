@@ -16,8 +16,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+enum class DeviceSortMode(val label: String) {
+    FAVORITES_FIRST("Favorites"),
+    RECENTLY_USED("Recent"),
+    NAME("Name")
+}
 
 class DevicesViewModel(
     private val discoveryRepository: DeviceDiscoveryRepository,
@@ -31,8 +38,25 @@ class DevicesViewModel(
     val connectionStatus: StateFlow<ConnectionStatus> = discoveryRepository.connectionStatus
     val error: StateFlow<String?> = discoveryRepository.error
 
-    val pairedDevices: StateFlow<List<PairedDevice>> = pairedDeviceRepository.pairedDevices
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _sortMode = MutableStateFlow(DeviceSortMode.FAVORITES_FIRST)
+    val sortMode: StateFlow<DeviceSortMode> = _sortMode.asStateFlow()
+
+    val pairedDevices: StateFlow<List<PairedDevice>> = combine(
+        pairedDeviceRepository.pairedDevices,
+        _sortMode
+    ) { list, mode ->
+        when (mode) {
+            DeviceSortMode.FAVORITES_FIRST -> list.sortedWith(
+                compareByDescending<PairedDevice> { it.isFavorite }
+                    .thenByDescending { it.lastConnectedAt }
+            )
+            DeviceSortMode.RECENTLY_USED -> list.sortedWith(
+                compareByDescending<PairedDevice> { maxOf(it.lastTransferredAt, it.lastConnectedAt) }
+                    .thenByDescending { it.useCount }
+            )
+            DeviceSortMode.NAME -> list.sortedBy { it.alias.lowercase() }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val connectionStates: StateFlow<Map<String, ConnectionState>> = connectionManager.connectionStates
     val pairingResult: StateFlow<PairingResult> = pairingManager.pairingResult
@@ -51,6 +75,10 @@ class DevicesViewModel(
 
     init {
         discoveryRepository.startDiscovery()
+    }
+
+    fun setSortMode(mode: DeviceSortMode) {
+        _sortMode.value = mode
     }
 
     fun refreshDiscovery() {
@@ -98,6 +126,18 @@ class DevicesViewModel(
 
     fun disconnectDevice(deviceId: String) {
         connectionManager.disconnect(deviceId)
+    }
+
+    fun toggleFavorite(deviceId: String, isFavorite: Boolean) {
+        viewModelScope.launch {
+            pairedDeviceRepository.setFavorite(deviceId, isFavorite)
+        }
+    }
+
+    fun setPerDeviceAutoAccept(deviceId: String, autoAccept: Boolean) {
+        viewModelScope.launch {
+            pairedDeviceRepository.setAutoAccept(deviceId, autoAccept)
+        }
     }
 
     fun openDeviceDetails(device: PairedDevice) {

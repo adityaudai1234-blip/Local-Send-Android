@@ -11,10 +11,12 @@ data class FileMetadata(
     val fileSize: Long,
     val mimeType: String = "application/octet-stream",
     val checksum: String = "",
-    val offset: Long = 0L
+    val offset: Long = 0L,
+    val relativePath: String? = null
 ) {
     val formattedSize: String
         get() = com.example.domain.model.TransferItem.formatBytes(fileSize)
+
     fun toJson(): JSONObject {
         val json = JSONObject()
         json.put("fileId", fileId)
@@ -23,6 +25,9 @@ data class FileMetadata(
         json.put("mimeType", mimeType)
         json.put("checksum", checksum)
         json.put("offset", offset)
+        if (!relativePath.isNullOrBlank()) {
+            json.put("relativePath", relativePath)
+        }
         return json
     }
 
@@ -30,13 +35,16 @@ data class FileMetadata(
         fun fromJson(json: JSONObject): FileMetadata {
             val rawName = json.optString("fileName", "unnamed_file")
             val sanitized = sanitizeFileName(rawName)
+            val rawRel = if (json.has("relativePath")) json.optString("relativePath", "") else ""
+            val sanitizedRel = sanitizeRelativePath(rawRel)
             return FileMetadata(
                 fileId = json.optString("fileId", java.util.UUID.randomUUID().toString()),
                 fileName = sanitized,
                 fileSize = json.optLong("fileSize", 0L),
                 mimeType = json.optString("mimeType", "application/octet-stream"),
                 checksum = json.optString("checksum", ""),
-                offset = json.optLong("offset", 0L)
+                offset = json.optLong("offset", 0L),
+                relativePath = sanitizedRel
             )
         }
 
@@ -64,12 +72,35 @@ data class FileMetadata(
          */
         fun sanitizeFileName(rawName: String): String {
             var name = rawName.replace("\\", "/").substringAfterLast('/')
-            // Remove any dangerous null bytes or path traversal markers
             name = name.replace("\u0000", "").replace("..", "").trim()
             if (name.isBlank() || name == "." || name == "..") {
                 name = "file_${System.currentTimeMillis()}"
             }
             return name
+        }
+
+        /**
+         * Security: Sanitizes a relative path for folder-structured transfers.
+         * Rejects traversal segments (".."), drive letters ("C:"), null bytes, and leading slashes.
+         * Returns a normalized POSIX path like "TripPhotos/Day1/photo.jpg" or null if empty/unsafe.
+         */
+        fun sanitizeRelativePath(rawRelativePath: String?): String? {
+            if (rawRelativePath.isNullOrBlank()) return null
+            if (rawRelativePath.contains('\u0000')) return null
+            val normalized = rawRelativePath.replace("\\", "/").trim().trimStart('/')
+            if (normalized.isBlank()) return null
+
+            val segments = normalized.split('/')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+
+            if (segments.isEmpty()) return null
+            for (seg in segments) {
+                if (seg == "." || seg == ".." || seg.contains("..") || seg.contains(':')) {
+                    return null
+                }
+            }
+            return segments.joinToString("/")
         }
     }
 }

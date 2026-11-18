@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.AlertDialog
@@ -28,6 +30,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +76,7 @@ fun DevicesScreen(
     val error by viewModel.error.collectAsState()
 
     val pairedDevices by viewModel.pairedDevices.collectAsState()
+    val sortMode by viewModel.sortMode.collectAsState()
     val connectionStates by viewModel.connectionStates.collectAsState()
     val pairingResult by viewModel.pairingResult.collectAsState()
 
@@ -84,6 +88,15 @@ fun DevicesScreen(
     var devicePendingUnpair by remember { mutableStateOf<PairedDevice?>(null) }
     var devicePendingRename by remember { mutableStateOf<PairedDevice?>(null) }
     var renameText by remember { mutableStateOf("") }
+
+    val favoriteDevices = remember(pairedDevices) { pairedDevices.filter { it.isFavorite } }
+    val regularPairedDevices = remember(pairedDevices) {
+        if (sortMode == DeviceSortMode.FAVORITES_FIRST && favoriteDevices.isNotEmpty()) {
+            pairedDevices.filter { !it.isFavorite }
+        } else {
+            pairedDevices
+        }
+    }
 
     LazyColumn(
         modifier = modifier
@@ -219,42 +232,103 @@ fun DevicesScreen(
             }
         }
 
-        // SECTION 1: PAIRED DEVICES (Persisted in Room & Android Keystore)
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        // FAVORITES SECTION (when starred devices exist)
+        if (favoriteDevices.isNotEmpty() && sortMode == DeviceSortMode.FAVORITES_FIRST) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
-                        imageVector = Icons.Default.VerifiedUser,
+                        imageVector = Icons.Default.Star,
                         contentDescription = null,
-                        tint = CyanAccent,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Trusted Devices (${pairedDevices.size})",
+                        text = "Favorite Devices (${favoriteDevices.size})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
+            }
 
-                TextButton(
-                    onClick = onManageTrustedClick,
-                    modifier = Modifier.testTag("manage_trusted_devices_button")
+            items(
+                items = favoriteDevices,
+                key = { "fav_${it.id}" }
+            ) { fav ->
+                val connState = connectionStates[fav.id] ?: ConnectionState.Disconnected
+                PairedDeviceCard(
+                    device = fav,
+                    connectionState = connState,
+                    onConnectClick = { viewModel.connectDevice(fav) },
+                    onDisconnectClick = { viewModel.disconnectDevice(fav.id) },
+                    onDetailsClick = { viewModel.openDeviceDetails(fav) },
+                    onRenameClick = {
+                        renameText = fav.alias
+                        devicePendingRename = fav
+                    },
+                    onToggleFavorite = { isFav -> viewModel.toggleFavorite(fav.id, isFav) },
+                    onRemoveClick = { devicePendingUnpair = fav }
+                )
+            }
+        }
+
+        // SECTION 1: PAIRED / TRUSTED DEVICES
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.ManageAccounts,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Manage")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.VerifiedUser,
+                            contentDescription = null,
+                            tint = CyanAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Trusted Devices (${pairedDevices.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    TextButton(
+                        onClick = onManageTrustedClick,
+                        modifier = Modifier.testTag("manage_trusted_devices_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ManageAccounts,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Manage")
+                    }
+                }
+
+                if (pairedDevices.size > 1) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(DeviceSortMode.entries) { mode ->
+                            FilterChip(
+                                selected = sortMode == mode,
+                                onClick = { viewModel.setSortMode(mode) },
+                                label = { Text("Sort: ${mode.label}") },
+                                modifier = Modifier.testTag("device_sort_${mode.name}")
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -291,9 +365,9 @@ fun DevicesScreen(
                     }
                 }
             }
-        } else {
+        } else if (regularPairedDevices.isNotEmpty()) {
             items(
-                items = pairedDevices,
+                items = regularPairedDevices,
                 key = { it.id }
             ) { pairedDevice ->
                 val connState = connectionStates[pairedDevice.id] ?: ConnectionState.Disconnected
@@ -307,6 +381,7 @@ fun DevicesScreen(
                         renameText = pairedDevice.alias
                         devicePendingRename = pairedDevice
                     },
+                    onToggleFavorite = { isFav -> viewModel.toggleFavorite(pairedDevice.id, isFav) },
                     onRemoveClick = { devicePendingUnpair = pairedDevice }
                 )
             }
@@ -393,6 +468,8 @@ fun DevicesScreen(
 
     if (showScanQr) {
         ScanQrDialog(
+            pairedDevices = pairedDevices,
+            onFastReconnectPeer = { viewModel.connectDevice(it) },
             onPayloadScanned = { payload ->
                 viewModel.onPayloadScanned(payload)
             },

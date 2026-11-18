@@ -10,6 +10,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.ThemeMode
 
 private val DarkColorScheme = darkColorScheme(
@@ -53,6 +54,7 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun LocalDropTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    accentColor: AccentColorOption = AccentColorOption.TEAL,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -62,13 +64,56 @@ fun LocalDropTheme(
         ThemeMode.DARK -> true
     }
 
+    val useDynamic = (dynamicColor || accentColor == AccentColorOption.DYNAMIC) &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        useDynamic -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+        darkTheme -> when (accentColor) {
+            AccentColorOption.CYAN -> DarkColorScheme.copy(
+                primary = CyanAccentLight,
+                onPrimary = Color(0xFF00334E),
+                primaryContainer = CyanAccentDark,
+                onPrimaryContainer = Color(0xFFE0F2FE)
+            )
+            AccentColorOption.INDIGO -> DarkColorScheme.copy(
+                primary = IndigoAccentLight,
+                onPrimary = Color(0xFF1E1B4B),
+                primaryContainer = IndigoAccentDark,
+                onPrimaryContainer = Color(0xFFE0E7FF)
+            )
+            AccentColorOption.EMERALD -> DarkColorScheme.copy(
+                primary = EmeraldAccentLight,
+                onPrimary = Color(0xFF022C22),
+                primaryContainer = EmeraldAccentDark,
+                onPrimaryContainer = Color(0xFFD1FAE5)
+            )
+            else -> DarkColorScheme
+        }
+        else -> when (accentColor) {
+            AccentColorOption.CYAN -> LightColorScheme.copy(
+                primary = CyanAccentDark,
+                onPrimary = Color.White,
+                primaryContainer = Color(0xFFE0F2FE),
+                onPrimaryContainer = Color(0xFF0C4A6E)
+            )
+            AccentColorOption.INDIGO -> LightColorScheme.copy(
+                primary = IndigoAccentDark,
+                onPrimary = Color.White,
+                primaryContainer = Color(0xFFE0E7FF),
+                onPrimaryContainer = Color(0xFF312E81)
+            )
+            AccentColorOption.EMERALD -> LightColorScheme.copy(
+                primary = EmeraldAccentDark,
+                onPrimary = Color.White,
+                primaryContainer = Color(0xFFD1FAE5),
+                onPrimaryContainer = Color(0xFF064E3B)
+            )
+            else -> LightColorScheme
+        }
     }
 
     MaterialTheme(

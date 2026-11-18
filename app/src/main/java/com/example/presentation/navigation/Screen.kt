@@ -49,6 +49,9 @@ sealed class Screen(
         const val ROUTE_TRANSFER_DETAILS = "transfer_details/{transferId}"
         const val ROUTE_TRUSTED_DEVICES = "trusted_devices"
         const val ROUTE_STORAGE_MANAGEMENT = "storage_management"
+        const val ROUTE_RECEIVED_FILES = "received_files"
+        const val ROUTE_NETWORK_DIAGNOSTICS = "network_diagnostics"
+        const val ROUTE_PRIVACY_DASHBOARD = "privacy_dashboard"
 
         fun transferDetailsRoute(transferId: String): String = "transfer_details/$transferId"
 

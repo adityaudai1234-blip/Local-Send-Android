@@ -15,5 +15,9 @@ data class PairedDeviceEntity(
     val isTrusted: Boolean = true,
     val pairedAt: Long = System.currentTimeMillis(),
     val lastConnectedAt: Long = System.currentTimeMillis(),
-    val model: String? = null
+    val model: String? = null,
+    val isFavorite: Boolean = false,
+    val useCount: Int = 0,
+    val lastTransferredAt: Long = 0L,
+    val autoAccept: Boolean = false
 )

@@ -12,5 +12,9 @@ interface PairedDeviceRepository {
     suspend fun removePairedDevice(id: String)
     suspend fun renameDevice(id: String, newAlias: String)
     suspend fun updateLastConnected(id: String)
+    suspend fun setFavorite(id: String, isFavorite: Boolean)
+    suspend fun setAutoAccept(id: String, autoAccept: Boolean)
+    suspend fun incrementUsage(id: String)
+    suspend fun updateNetworkEndpoint(id: String, ipAddress: String, port: Int)
     suspend fun clearAllDevices()
 }

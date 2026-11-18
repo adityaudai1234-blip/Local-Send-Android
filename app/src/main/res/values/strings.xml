@@ -22,4 +22,8 @@
     
     <string name="no_devices_found">No devices found</string>
     <string name="no_devices_hint">Make sure both devices are connected to the same Wi-Fi or local network.</string>
+
+    <string name="widget_device_status_desc">View nearby LocalDrop devices and live LAN discovery status</string>
+    <string name="widget_quick_send_desc">Quickly send files to a favorite or recent LocalDrop device</string>
+    <string name="widget_transfer_status_desc">Monitor active and completed LocalDrop transfers</string>
 </resources>

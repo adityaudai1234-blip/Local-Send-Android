@@ -20,7 +20,7 @@ This specification defines the network framing, message formats, pairing handsha
   * The next $L$ bytes contain UTF-8 encoded JSON.
   * Maximum control frame size: `2,097,152` bytes (2 MB); frames exceeding bounds or containing empty `senderId` are rejected immediately.
 * **Payload Channel (Binary Chunk Streaming)**:
-  * Raw file contents are streamed in 64 KB binary frames (`DEFAULT_CHUNK_SIZE = 65536`) with magic headers so multi-gigabyte files never buffer entirely in RAM.
+  * Raw file contents are streamed in configurable binary frames (`DEFAULT_CHUNK_SIZE = 65536` bytes / 64 KB default; sender-selectable `32 KB`, `64 KB`, `128 KB`, or `256 KB` buffers; strict receiver frame cap of `512 KB` = `DEFAULT_CHUNK_SIZE * 8` in `FileStreamFraming`) with magic headers so multi-gigabyte files never buffer entirely in RAM.
 
 ```
 Length-Prefixed Control Frame:
@@ -71,11 +71,12 @@ All control messages share this JSON structure:
 * `HEARTBEAT`: Ping/pong keepalive packet.
 * `ERROR`: Returns structured error code and human-readable description.
 
-### 4.2 File Transfer Messages (Phase 3 & 4)
-* `TRANSFER_REQUEST`: Sender initiates session with `sessionId`, `files[]` (`fileId`, `fileName`, `fileSize`, `mimeType`), `totalSize`, and optional `tlsPreferred`.
+### 4.2 File Transfer Messages (Phase 3, 4 & 5)
+* `TRANSFER_REQUEST`: Sender initiates session with `sessionId`, `files[]` (`fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`), `totalSize`, and optional `tlsPreferred`.
+  * `relativePath` (optional UTF-8 POSIX path, e.g., `"TripPhotos/Day1/photo.jpg"`): Enables folder-hierarchy preservation across Android and Tauri desktop peers while remaining 100% optional for legacy v1/v2 flat-file peers.
 * `TRANSFER_ACCEPTED`: Receiver approves the transfer session.
 * `TRANSFER_REJECTED`: Receiver declines (user declined, unknown peer policy, size limit exceeded, or insufficient disk space).
-* `TRANSFER_STARTED`: Sender announces start of a specific file stream on socket.
+* `TRANSFER_STARTED`: Sender announces start of a specific file stream on socket (`sessionId`, `fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`, `senderName`).
 * `TRANSFER_PROGRESS`: Optional progress notification.
 * `TRANSFER_PAUSED`: Notifies peer that transfer was paused.
 * `TRANSFER_RESUMED`: Notifies peer that transfer was resumed.
@@ -101,7 +102,7 @@ All control messages share this JSON structure:
 ```
 Sender (Android or Tauri)                          Receiver (Android or Tauri)
       |                                                        |
-      | 1. TRANSFER_REQUEST (sessionId, file list, totalSize)  |
+      | 1. TRANSFER_REQUEST (sessionId, files[], totalSize)    |
       |------------------------------------------------------->|
       |                                                        | [Validate size/policy/suspicious exts]
       |                                                        | [Explicit consent unless trusted auto-accept]
@@ -111,14 +112,15 @@ Sender (Android or Tauri)                          Receiver (Android or Tauri)
       | 3. Connect dedicated streaming socket (TLS if v2)      |
       |=======================================================>|
       |                                                        |
-      | 4. TRANSFER_STARTED (fileId, fileName, fileSize)       |
+      | 4. TRANSFER_STARTED (fileId, fileName, relativePath?)  |
       |------------------------------------------------------->|
+      |                                                        | [Sanitize relativePath & check canonical prefix]
       |                                                        | [Create temp file: .tmp_{fileId}]
       | 5. Binary Chunk Frames (CHUNK_MAGIC, offset, data...)   |
-      |------------------------------------------------------->| [Write 64KB chunk, update SHA-256]
+      |------------------------------------------------------->| [Write chunk <= 512KB, update SHA-256]
       | 6. Binary EOF Frame (EOF_MAGIC, SHA-256 checksum)      |
       |------------------------------------------------------->| [Verify SHA-256]
-      |                                                        | [Apply duplicate policy: rename/overwrite/skip]
+      |                                                        | [Apply relativePath / organizeByType / duplicate policy]
       |                                                        | [Commit to Downloads/LocalDrop or SAF URI]
       | 7. TRANSFER_COMPLETED / Record Room History            |
       |<------------------------------------------------------>|
@@ -136,7 +138,7 @@ Magic: `0x4C534431` (ASCII `"LSD1"` = LocalSend Data v1)
 | Magic Header | UInt32 BE | 4 bytes | `0x4C534431` (`"LSD1"`) |
 | File Index | UInt32 BE | 4 bytes | Index of the file within the session (0-based) |
 | Chunk Offset | UInt64 BE | 8 bytes | Byte offset within the file |
-| Chunk Length $N$ | UInt32 BE | 4 bytes | Byte count of payload (default 65536) |
+| Chunk Length $N$ | UInt32 BE | 4 bytes | Byte count of payload (default 65536; allowed `<= 524288` / 512 KB) |
 | Payload Data | Bytes | $N$ bytes | Raw file bytes |
 
 ### 6.2 EOF Frame Format
@@ -153,7 +155,7 @@ Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
 ## 7. Security & Integrity Guarantees
 
 1. **Path Traversal Sanitization & Canonical Verification**:
-   Receiving peers sanitize all incoming filenames via `SecurityValidator.sanitizeFileName`, stripping `/`, `\`, `..`, null bytes, and control chars, then verifying `canonicalPath.startsWith(canonicalBase)`.
+   Receiving peers sanitize all incoming filenames via `SecurityValidator.sanitizeFileName`, and validate optional `relativePath` hierarchy via `FileMetadata.sanitizeRelativePath` / `SecurityValidator.isRelativePathSafe` (stripping leading slashes/backslashes, rejecting `..`, `:`, and null bytes, and enforcing `canonicalPath.startsWith(canonicalBase)` before creating directories or writing files).
 2. **Executable & Dangerous Extension Warnings**:
    Files ending in `.apk`, `.exe`, `.bat`, `.cmd`, `.sh`, `.msi`, `.jar`, `.ps1`, `.vbs`, etc. trigger an explicit security warning banner in `IncomingTransferDialog` before approval.
 3. **Atomic Writes & Startup Temp Cleanup**:
@@ -161,7 +163,7 @@ Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
 4. **SHA-256 Cryptographic Verification**:
    Computed incrementally per chunk and verified against the 32-byte EOF digest. Corrupted streams immediately purge the `.tmp` buffer.
 5. **Default-Deny Auto-Accept**:
-   `autoAcceptTrusted` defaults to `false`; explicit user approval (via dialog or notification Accept/Decline action) is required unless manually enabled by the user.
+   Global `autoAcceptTrusted` and per-device `PairedDevice.autoAccept` both default to `false`; explicit user approval (via dialog or notification Accept/Decline action) is required unless manually enabled by the user.
 6. **Abuse Controls**:
    Per-IP connection rate limiting (30 connections / 10 seconds) and peer authentication lockout (5 consecutive failures / 60 seconds).
 
@@ -169,4 +171,4 @@ Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
 
 ## 8. Tauri Desktop (Rust) Reference Compatibility
 
-Tauri desktop peers implementing `CHUNK_MAGIC = 0x4C534431`, `EOF_MAGIC = 0x4C53454F`, 4-byte BE length-prefixed UTF-8 JSON control envelopes, and `_lsend._tcp.` mDNS registration on port `53317` interoperate directly with Android v2. Tauri peers should populate `version: "v2"` when supporting TLS and gracefully handle `version: "v1"` frames for backward compatibility.
+Tauri desktop peers implementing `CHUNK_MAGIC = 0x4C534431`, `EOF_MAGIC = 0x4C53454F`, 4-byte BE length-prefixed UTF-8 JSON control envelopes, and `_lsend._tcp.` mDNS registration on port `53317` interoperate directly with Android v2. Tauri peers should populate `version: "v2"` when supporting TLS, include optional sanitized `relativePath` entries inside `FileMetadata` for folder transfers, respect the 512 KB max binary chunk length, and gracefully handle `version: "v1"` frames for backward compatibility.

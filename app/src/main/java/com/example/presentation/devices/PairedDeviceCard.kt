@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,8 +20,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -54,6 +56,7 @@ fun PairedDeviceCard(
     onDetailsClick: () -> Unit,
     onRemoveClick: () -> Unit,
     onRenameClick: (() -> Unit)? = null,
+    onToggleFavorite: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isConnected = connectionState is ConnectionState.Connected
@@ -73,7 +76,11 @@ fun PairedDeviceCard(
         ),
         border = BorderStroke(
             1.dp,
-            if (isConnected) CyanAccent.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+            when {
+                isConnected -> CyanAccent.copy(alpha = 0.55f)
+                device.isFavorite -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+            }
         )
     ) {
         Column(
@@ -110,7 +117,8 @@ fun PairedDeviceCard(
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
@@ -131,8 +139,9 @@ fun PairedDeviceCard(
                         overflow = TextOverflow.Ellipsis
                     )
 
+                    val usageSuffix = if (device.useCount > 0) " • ${device.useCount} transfer(s)" else ""
                     Text(
-                        text = "Last seen: $lastSeenStr",
+                        text = "Last seen: $lastSeenStr$usageSuffix",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                     )
@@ -154,7 +163,7 @@ fun PairedDeviceCard(
                     if (isConnected) {
                         OutlinedButton(
                             onClick = onDisconnectClick,
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.testTag("disconnect_button_${device.id}")
                         ) {
                             Icon(
@@ -169,7 +178,7 @@ fun PairedDeviceCard(
                         FilledTonalButton(
                             onClick = onConnectClick,
                             enabled = !isConnecting,
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             modifier = Modifier.testTag("connect_button_${device.id}")
                         ) {
                             Icon(
@@ -184,6 +193,22 @@ fun PairedDeviceCard(
                 }
 
                 Row {
+                    if (onToggleFavorite != null) {
+                        IconButton(
+                            onClick = { onToggleFavorite(!device.isFavorite) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("favorite_device_button_${device.id}")
+                        ) {
+                            Icon(
+                                imageVector = if (device.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = if (device.isFavorite) "Remove from favorites" else "Add to favorites",
+                                tint = if (device.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
                     if (onRenameClick != null) {
                         IconButton(
                             onClick = onRenameClick,

@@ -26,11 +26,20 @@ object SecurityValidator {
         return FileMetadata.sanitizeFileName(rawName)
     }
 
+    fun sanitizeRelativePath(rawRelativePath: String?): String? {
+        return FileMetadata.sanitizeRelativePath(rawRelativePath)
+    }
+
     fun isPathSafe(fileName: String): Boolean {
         if (fileName.isBlank()) return false
         if (fileName.contains("..") || fileName.contains('/') || fileName.contains('\\')) return false
         if (fileName.contains('\u0000')) return false
         return true
+    }
+
+    fun isRelativePathSafe(relativePath: String?): Boolean {
+        if (relativePath.isNullOrBlank()) return false
+        return FileMetadata.sanitizeRelativePath(relativePath) != null
     }
 
     fun isSuspiciousExtension(fileName: String): Boolean {

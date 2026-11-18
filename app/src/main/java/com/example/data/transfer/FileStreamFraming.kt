@@ -78,7 +78,7 @@ object FileStreamFraming {
                 val fileIndex = dataIn.readInt()
                 val chunkOffset = dataIn.readLong()
                 val length = dataIn.readInt()
-                if (length < 0 || length > DEFAULT_CHUNK_SIZE * 4) {
+                if (length < 0 || length > DEFAULT_CHUNK_SIZE * 8) {
                     throw IllegalArgumentException("Invalid chunk length: $length")
                 }
                 val buffer = if (reusableBuffer.size >= length) reusableBuffer else ByteArray(length)

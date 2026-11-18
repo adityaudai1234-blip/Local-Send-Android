@@ -74,7 +74,10 @@ class TransferRepositoryImpl(
                     peerDeviceName = item.peerDeviceName,
                     peerAddress = item.peerAddress,
                     errorMessage = item.errorMessage,
-                    timestamp = item.timestamp
+                    timestamp = item.timestamp,
+                    relativePath = item.relativePath,
+                    avgSpeedBytesPerSec = item.avgSpeedBytesPerSec,
+                    peakSpeedBytesPerSec = item.peakSpeedBytesPerSec
                 )
             )
         }

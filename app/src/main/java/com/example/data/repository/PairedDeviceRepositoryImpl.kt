@@ -15,37 +15,15 @@ class PairedDeviceRepositoryImpl(
 ) : PairedDeviceRepository {
 
     override val pairedDevices: Flow<List<PairedDevice>> = dao.getAll().map { list ->
-        list.map { entity ->
-            PairedDevice(
-                id = entity.id,
-                alias = entity.alias,
-                deviceType = DeviceType.fromIdentifier(entity.deviceType),
-                ipAddress = entity.ipAddress,
-                port = entity.port,
-                isTrusted = entity.isTrusted,
-                pairedAt = entity.pairedAt,
-                lastConnectedAt = entity.lastConnectedAt,
-                model = entity.model
-            )
-        }
+        list.map { it.toDomain() }
     }
 
     override suspend fun getPairedDevice(id: String): PairedDevice? {
-        val entity = dao.getById(id) ?: return null
-        return PairedDevice(
-            id = entity.id,
-            alias = entity.alias,
-            deviceType = DeviceType.fromIdentifier(entity.deviceType),
-            ipAddress = entity.ipAddress,
-            port = entity.port,
-            isTrusted = entity.isTrusted,
-            pairedAt = entity.pairedAt,
-            lastConnectedAt = entity.lastConnectedAt,
-            model = entity.model
-        )
+        return dao.getById(id)?.toDomain()
     }
 
     override suspend fun savePairedDevice(device: PairedDevice, rawAuthToken: String) {
+        val existing = dao.getById(device.id)
         val encryptedToken = securityKeyStore.encryptToken(rawAuthToken)
         val entity = PairedDeviceEntity(
             id = device.id,
@@ -55,9 +33,13 @@ class PairedDeviceRepositoryImpl(
             port = device.port,
             encryptedAuthToken = encryptedToken,
             isTrusted = device.isTrusted,
-            pairedAt = device.pairedAt,
+            pairedAt = existing?.pairedAt ?: device.pairedAt,
             lastConnectedAt = System.currentTimeMillis(),
-            model = device.model
+            model = device.model ?: existing?.model,
+            isFavorite = existing?.isFavorite ?: device.isFavorite,
+            useCount = existing?.useCount ?: device.useCount,
+            lastTransferredAt = existing?.lastTransferredAt ?: device.lastTransferredAt,
+            autoAccept = existing?.autoAccept ?: device.autoAccept
         )
         dao.insertOrUpdate(entity)
     }
@@ -82,8 +64,40 @@ class PairedDeviceRepositoryImpl(
         dao.updateLastConnected(id, System.currentTimeMillis())
     }
 
+    override suspend fun setFavorite(id: String, isFavorite: Boolean) {
+        dao.setFavorite(id, isFavorite)
+    }
+
+    override suspend fun setAutoAccept(id: String, autoAccept: Boolean) {
+        dao.setAutoAccept(id, autoAccept)
+    }
+
+    override suspend fun incrementUsage(id: String) {
+        dao.incrementUsage(id, System.currentTimeMillis())
+    }
+
+    override suspend fun updateNetworkEndpoint(id: String, ipAddress: String, port: Int) {
+        dao.updateNetworkEndpoint(id, ipAddress, port, System.currentTimeMillis())
+    }
+
     override suspend fun clearAllDevices() {
         dao.deleteAll()
         securityKeyStore.clearAllKeys()
     }
+
+    private fun PairedDeviceEntity.toDomain(): PairedDevice = PairedDevice(
+        id = id,
+        alias = alias,
+        deviceType = DeviceType.fromIdentifier(deviceType),
+        ipAddress = ipAddress,
+        port = port,
+        isTrusted = isTrusted,
+        pairedAt = pairedAt,
+        lastConnectedAt = lastConnectedAt,
+        model = model,
+        isFavorite = isFavorite,
+        useCount = useCount,
+        lastTransferredAt = lastTransferredAt,
+        autoAccept = autoAccept
+    )
 }

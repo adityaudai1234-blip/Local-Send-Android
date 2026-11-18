@@ -5,22 +5,28 @@
 LocalDrop is structured with clean MVVM & repository layering across Android Jetpack libraries:
 
 * **Presentation Layer (`com.example.presentation`)**:
-  * Pure Jetpack Compose Material 3 UI with edge-to-edge layout (`enableEdgeToEdge()`, `WindowInsets.safeDrawing`).
-  * Top-level Navigation (`MainAppScaffold`): `Home`, `Devices`, `Transfers`, `Settings`.
+  * Pure Jetpack Compose Material 3 UI with edge-to-edge layout (`enableEdgeToEdge()`, `WindowInsets.safeDrawing`) and customizable accent palettes (`Ocean Teal`, `Sky Cyan`, `Electric Indigo`, `Fresh Emerald`, `Wallpaper Dynamic`).
+  * Top-level Navigation (`MainAppScaffold`): `Home`, `Devices`, `Transfers`, `Settings`, plus Android Share Sheet (`ACTION_SEND` / `ACTION_SEND_MULTIPLE`) and Glance Widget deep-link routing.
+  * Pre-send UX & Pairing: `FilePreviewThumbnail` / `FilePreviewDialog` (sampled images, video frames/duration, audio tags, PDF first-page rendering, text snippets), `TransferConfirmationDialog` (selected files, destination chips, total size, measured ETA), `GenerateQrDialog` (Share QR bitmap, Save QR to gallery, non-secret copy), and `ScanQrDialog` (haptic feedback & fast reconnect chips).
   * Detail sub-routes:
-    * `TransferDetailsScreen` (metadata, SHA-256 copy, retry/open/share/delete actions).
-    * `TrustedDevicesScreen` (local alias rename, Keystore security info, ping, revoke trust).
+    * `TransferDetailsScreen` (metadata, relative path badge, SHA-256 copy, retry/open/share/delete actions).
+    * `TrustedDevicesScreen` (favorites, local alias rename, Keystore security info, per-device opt-in `autoAccept`, ping, revoke trust).
     * `StorageManagementScreen` (SAF folder selection, temp cache sweep, multi-select received file cleanup).
+    * `ReceivedFilesScreen` (dedicated browser with `ReceivedFileCategory` tabs, search, sorting, thumbnail/document previews, system Share, confirmed delete).
+    * `NetworkDiagnosticsScreen` (live Wi-Fi/interface status, mDNS & TCP listener state, loopback port probe, bounded reconnect trigger, per-peer RTT latency ping, recent connection error log, troubleshooting guide).
+    * `PrivacyDashboardScreen` (zero-cloud posture summary, broadcast/approval toggles, cache & history cleanup, Keystore revocation).
+* **Widget Layer (`com.example.widget`)**:
+  * Jetpack Glance Material 3 Home Screen Widgets: `DeviceStatusWidget`, `QuickSendWidget`, and `TransferStatusWidget`, updated cleanly via debounced `WidgetUpdateHelper`.
 * **Domain Layer (`com.example.domain`)**:
-  * Immutable models (`Device`, `PairedDevice`, `TransferItem`, `AppSettings`, `TransferStats`) and repository contracts (`DeviceDiscoveryRepository`, `PairedDeviceRepository`, `TransferRepository`, `SettingsRepository`).
+  * Immutable models (`Device`, `PairedDevice`, `TransferItem`, `AppSettings`, `TransferStats`, `AccentColorOption`) and repository contracts (`DeviceDiscoveryRepository`, `PairedDeviceRepository`, `TransferRepository`, `SettingsRepository`).
 * **Data Layer (`com.example.data`)**:
   * **Discovery**: `NsdDiscoveryManager` (`_lsend._tcp.`) with lifecycle-aware start/stop and configurable refresh/stale cleanup interval.
-  * **Transport & TLS**: `TcpServer`, `TcpClient`, `ConnectionManager`, and `TlsTransport` (`TLSv1.2`/`TLSv1.3`).
-  * **Pairing & Security**: `PairingManager`, `SecurityKeyStore` (Android Keystore AES-256-GCM encryption for peer tokens), and `SecurityValidator` (path traversal prevention, rate limiting, auth lockout, port/size checks, suspicious extension flagging).
+  * **Transport & TLS**: `TcpServer`, `TcpClient`, `ConnectionManager` (ConnectivityManager `NetworkCallback`, mDNS endpoint synchronization, bounded 3-attempt exponential-backoff reconnection, per-peer latency probing, error ring buffer), and `TlsTransport` (`TLSv1.2`/`TLSv1.3`).
+  * **Pairing & Security**: `PairingManager`, `SecurityKeyStore` (Android Keystore AES-256-GCM encryption for peer tokens), and `SecurityValidator` (filename + `relativePath` traversal prevention, rate limiting, auth lockout, port/size checks, suspicious extension flagging).
   * **Persistence**:
-    * **Room (`AppDatabase`)**: Stores persistent `TransferEntity` history (including sender/receiver, duration, speed, SHA-256 checksum, destination path/URI, failure reason) and `PairedDeviceEntity`.
-    * **DataStore (`SettingsDataStore`)**: Stores all 6 settings categories (`General`, `Network`, `File Transfers`, `Storage`, `Privacy & Security`, `About`) plus persistent local node UUID.
-  * **Transfer Engine**: `TransferManager` + `FileTransferService` (foreground notification service with Cancel action & notification grouping), `FileStreamFraming` (64 KB buffered chunked I/O + SHA-256), `StorageManager` (SAF `DocumentsContract` & `FileProvider`), and `TransferNotificationHelper` / `TransferNotificationReceiver`.
+    * **Room (`AppDatabase` v4)**: Stores persistent `TransferEntity` history (including `relativePath`, `avgSpeedBytesPerSec`, `peakSpeedBytesPerSec`, duration, SHA-256 checksum, destination path/URI, failure reason) and `PairedDeviceEntity` (including `isFavorite`, `useCount`, `lastTransferredAt`, per-device opt-in `autoAccept`).
+    * **DataStore (`SettingsDataStore`)**: Stores all settings categories (`General`, `Network`, `File Transfers`, `Storage`, `Privacy & Security`, `Automation & Smart Suggestions`, `Theme & Accent`, `About`) plus persistent local node UUID and remembered destination device ID.
+  * **Transfer Engine**: `TransferManager` + `FileTransferService` (foreground notification service with Cancel action & notification grouping), `FileStreamFraming` (configurable 32–256 KB send chunks, 512 KB receive frame cap + SHA-256), `StorageManager` (folder hierarchy preservation, optional category auto-organization, SAF `DocumentsContract`, `MediaStore`, `FileProvider`), and `TransferNotificationHelper` / `TransferNotificationReceiver`.
 
 ---
 
@@ -47,27 +53,27 @@ LocalDrop declares strictly least-privilege permissions in `AndroidManifest.xml`
 
 | Permission | Purpose | Runtime Prompt? |
 |---|---|---|
-| `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE` | Local LAN TCP sockets, Wi-Fi interface detection, and mDNS multicast discovery | No (Install-time) |
+| `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE` | Local LAN TCP sockets, Wi-Fi interface detection, `ConnectivityManager` callbacks, and mDNS multicast discovery | No (Install-time) |
 | `NEARBY_WIFI_DEVICES` (`usesPermissionFlags="neverForLocation"`, API 33+) | Discover nearby peers over local Wi-Fi without requiring location access | Yes (Android 13+) |
 | `CAMERA` | Scan QR codes for local peer pairing | Yes (only when QR scanner opened) |
 | `POST_NOTIFICATIONS` (API 33+) | Show incoming transfer requests (Accept/Decline), live progress, and completion alerts | Yes (Android 13+) |
 | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` | Keep active multi-file transfers reliable when backgrounded | No |
-| Storage Selection | Uses Android Photo Picker (`PickVisualMedia`) / SAF (`OpenMultipleDocuments`, `OpenDocumentTree`) — **zero** broad `READ_EXTERNAL_STORAGE` or `MANAGE_EXTERNAL_STORAGE` permissions requested | No |
+| Storage Selection & Share Sheet | Uses Android Photo Picker (`PickVisualMedia`), SAF (`OpenMultipleDocuments`, `OpenDocumentTree`), and `ACTION_SEND`/`SEND_MULTIPLE` read grants — **zero** broad `READ_EXTERNAL_STORAGE` or `MANAGE_EXTERNAL_STORAGE` permissions requested | No |
 
 ---
 
 ## 4. Security Checklist
 
 ### Implemented Controls
-- Encrypted peer token storage via `AndroidKeyStore` (`AES/GCM/NoPadding`, `SecurityKeyStore`).
+- Encrypted peer token storage via `AndroidKeyStore` (`AES/GCM/NoPadding`, `SecurityKeyStore`). Permanent auth keys are never exported into QR share/save images or copied connection info.
 - Disallowed unguarded HTTP cleartext traffic globally via `res/xml/network_security_config.xml` (`cleartextTrafficPermitted="false"`).
-- Filename & canonical path traversal sanitization (`SecurityValidator.sanitizeFileName` + canonical base prefix checks).
+- Filename & folder `relativePath` traversal sanitization (`SecurityValidator.sanitizeFileName`, `SecurityValidator.isRelativePathSafe`, and canonical base prefix checks in `StorageManager.resolveDestinationWithPolicy`).
 - Suspicious executable extension detection (`.apk`, `.exe`, `.bat`, `.sh`, etc.) surfaced prominently in incoming transfer approval UI.
 - Per-IP incoming socket rate limiting (30 connections / 10 seconds) and peer authentication lockout (5 failed attempts / 60 seconds).
-- Oversized control frame rejection (max 2 MB) and blank `senderId` rejection.
-- Default-deny auto-accept (`autoAcceptTrusted = false` by default).
-- Incremental SHA-256 verification per file stream; immediate temp file deletion on hash mismatch or cancellation.
-- One-tap "Clear Stored Credentials" in Settings -> Privacy & Security (wipes Room `paired_devices` table and `AndroidKeyStore` key material).
+- Oversized control frame rejection (max 2 MB), binary chunk ceiling (512 KB), and blank `senderId` rejection.
+- Default-deny auto-accept (global `autoAcceptTrusted = false` and per-device `PairedDevice.autoAccept = false` by default).
+- Incremental SHA-256 verification per file stream; immediate temp file deletion on hash mismatch or cancellation, plus startup/configurable temp cleanup.
+- Dedicated Privacy Dashboard & "Clear Stored Credentials" (wipes Room `paired_devices` table and `AndroidKeyStore` key material).
 
 ### Remaining Limitations & Future Hardening
 - Cross-platform Tauri peers using legacy `v1` unencrypted TCP framing are still accepted on local LAN when `v2` TLS handshake bytes (`0x16`) are absent; disabling `v1` fallback strictly requires a matching Tauri desktop `v2` TLS release.

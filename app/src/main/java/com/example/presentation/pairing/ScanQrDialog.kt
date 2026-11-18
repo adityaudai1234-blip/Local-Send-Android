@@ -2,7 +2,6 @@ package com.example.presentation.pairing
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,8 +11,6 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -27,19 +24,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,9 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -62,7 +55,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -73,9 +68,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.pairing.PairingPayload
-import com.example.domain.model.DeviceType
+import com.example.domain.model.PairedDevice
 import com.example.ui.theme.CyanAccent
-import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusSuccess
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
@@ -88,10 +82,14 @@ import java.util.concurrent.Executors
 fun ScanQrDialog(
     onPayloadScanned: (PairingPayload) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hapticsEnabled: Boolean = true,
+    pairedDevices: List<PairedDevice> = emptyList(),
+    onFastReconnectPeer: ((PairedDevice) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptic = LocalHapticFeedback.current
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -99,7 +97,7 @@ fun ScanQrDialog(
         )
     }
 
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Camera Scan, 1: Manual / Test Code
+    var selectedTab by remember { mutableIntStateOf(0) }
     var manualInputText by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -109,7 +107,7 @@ fun ScanQrDialog(
     ) { isGranted ->
         hasCameraPermission = isGranted
         if (!isGranted) {
-            selectedTab = 1 // Switch to manual / simulated entry
+            selectedTab = 1
         }
     }
 
@@ -170,7 +168,6 @@ fun ScanQrDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Tabs: Camera Viewfinder vs Manual / Test Input
                 TabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -185,18 +182,17 @@ fun ScanQrDialog(
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = { Text("Manual / Test Code") }
+                        text = { Text("Manual / Quick") }
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 if (selectedTab == 0) {
-                    // Camera Scanner View
                     if (hasCameraPermission) {
                         Box(
                             modifier = Modifier
-                                .size(260.dp)
+                                .size(250.dp)
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(Color.Black),
                             contentAlignment = Alignment.Center
@@ -230,6 +226,9 @@ fun ScanQrDialog(
                                                                 errorMessage = "Scanned QR code has expired!"
                                                             } else {
                                                                 isProcessing = true
+                                                                if (hapticsEnabled) {
+                                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                }
                                                                 onPayloadScanned(payload)
                                                             }
                                                         } else {
@@ -257,19 +256,28 @@ fun ScanQrDialog(
                                 modifier = Modifier.fillMaxSize()
                             )
 
-                            // Reticle bounding box overlay
                             Box(
                                 modifier = Modifier
-                                    .size(190.dp)
-                                    .border(2.dp, CyanAccent, RoundedCornerShape(14.dp))
+                                    .size(180.dp)
+                                    .border(
+                                        2.dp,
+                                        if (isProcessing) StatusSuccess else CyanAccent,
+                                        RoundedCornerShape(14.dp)
+                                    )
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = if (isProcessing) "QR detected! Authenticating peer…" else "Align the peer's QR code inside the frame",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (isProcessing) StatusSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     } else {
-                        // Permission Denied View
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(24.dp),
+                                .padding(20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Icon(
@@ -291,12 +299,46 @@ fun ScanQrDialog(
                         }
                     }
                 } else {
-                    // Manual or Test Payload Entry
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 4.dp)
                     ) {
+                        if (pairedDevices.isNotEmpty() && onFastReconnectPeer != null) {
+                            Text(
+                                text = "Fast Reconnect Paired Peer",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(pairedDevices, key = { it.id }) { peer ->
+                                    AssistChip(
+                                        onClick = {
+                                            if (hapticsEnabled) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            }
+                                            onFastReconnectPeer(peer)
+                                            onDismiss()
+                                        },
+                                        label = { Text(peer.alias) },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Link,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+
                         Text(
                             text = "Paste Pairing Payload JSON",
                             style = MaterialTheme.typography.labelMedium,
@@ -310,8 +352,8 @@ fun ScanQrDialog(
                                 errorMessage = null
                             },
                             placeholder = { Text("{\"protocolVersion\":\"v1\",...}") },
-                            minLines = 4,
-                            maxLines = 6,
+                            minLines = 3,
+                            maxLines = 5,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("manual_qr_input")
@@ -319,7 +361,6 @@ fun ScanQrDialog(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Quick Test Button for developer emulator testing
                         OutlinedButton(
                             onClick = {
                                 val testPayload = PairingPayload(
@@ -342,7 +383,7 @@ fun ScanQrDialog(
                             Text("Insert Test Desktop Peer QR")
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Button(
                             onClick = {
@@ -352,6 +393,9 @@ fun ScanQrDialog(
                                 } else if (payload.isExpired) {
                                     errorMessage = "This pairing token has expired."
                                 } else {
+                                    if (hapticsEnabled) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
                                     onPayloadScanned(payload)
                                 }
                             },
@@ -365,7 +409,6 @@ fun ScanQrDialog(
                     }
                 }
 
-                // Error Message Display
                 if (errorMessage != null) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Row(

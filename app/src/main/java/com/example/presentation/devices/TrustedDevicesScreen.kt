@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -238,6 +241,16 @@ fun TrustedDevicesScreen(
                                     }
                                 }
                                 ConnectionStatusBadge(state = connState)
+                                IconButton(
+                                    onClick = { viewModel.toggleFavorite(device.id, !device.isFavorite) },
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (device.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                        contentDescription = if (device.isFavorite) "Unfavorite" else "Favorite",
+                                        tint = if (device.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
 
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
@@ -247,6 +260,28 @@ fun TrustedDevicesScreen(
                             MetaInfoRow("Paired On", formatFullDate(device.pairedAt))
                             if (!device.model.isNullOrBlank()) {
                                 MetaInfoRow("Hardware Model", device.model)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Auto-accept from this peer",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Opt-in only (disabled by default for security)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = device.autoAccept,
+                                    onCheckedChange = { viewModel.setPerDeviceAutoAccept(device.id, it) }
+                                )
                             }
 
                             Row(

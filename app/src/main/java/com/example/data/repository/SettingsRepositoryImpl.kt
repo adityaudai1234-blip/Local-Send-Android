@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import com.example.data.preferences.SettingsDataStore
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
 import com.example.domain.repository.SettingsRepository
@@ -32,6 +33,7 @@ class SettingsRepositoryImpl(
 
     override suspend fun setDeviceName(name: String) = dataStore.updateDeviceName(name)
     override suspend fun setThemeMode(mode: ThemeMode) = dataStore.updateThemeMode(mode)
+    override suspend fun setAccentColor(option: AccentColorOption) = dataStore.updateAccentColor(option)
     override suspend fun setAutoStartReceiving(enabled: Boolean) = dataStore.updateAutoStartReceiving(enabled)
     override suspend fun setAutoAcceptTrusted(enabled: Boolean) = dataStore.updateAutoAcceptTrusted(enabled)
     override suspend fun setAskBeforeReceiving(enabled: Boolean) = dataStore.updateAskBeforeReceiving(enabled)
@@ -42,6 +44,7 @@ class SettingsRepositoryImpl(
     override suspend fun setDiscoveryIntervalSeconds(seconds: Int) = dataStore.updateDiscoveryIntervalSeconds(seconds)
     override suspend fun setConnectionTimeoutMs(timeoutMs: Int) = dataStore.updateConnectionTimeoutMs(timeoutMs)
     override suspend fun setMaxConcurrent(count: Int) = dataStore.updateMaxConcurrent(count)
+    override suspend fun setTransferBufferSizeKb(sizeKb: Int) = dataStore.updateTransferBufferSizeKb(sizeKb)
     override suspend fun setDuplicateHandling(handling: String) = dataStore.updateDuplicateHandling(handling)
     override suspend fun setPreserveOriginalNames(enabled: Boolean) = dataStore.updatePreserveOriginalNames(enabled)
     override suspend fun setAutoOpenCompleted(enabled: Boolean) = dataStore.updateAutoOpenCompleted(enabled)
@@ -49,4 +52,9 @@ class SettingsRepositoryImpl(
     override suspend fun setRequireApprovalUnknown(enabled: Boolean) = dataStore.updateRequireApprovalUnknown(enabled)
     override suspend fun setTlsPreferred(enabled: Boolean) = dataStore.updateTlsPreferred(enabled)
     override suspend fun setHapticsEnabled(enabled: Boolean) = dataStore.updateHapticsEnabled(enabled)
+    override suspend fun setSuggestRecentDevices(enabled: Boolean) = dataStore.updateSuggestRecentDevices(enabled)
+    override suspend fun setRememberLastDestination(enabled: Boolean) = dataStore.updateRememberLastDestination(enabled)
+    override suspend fun setLastDestinationDeviceId(deviceId: String?) = dataStore.updateLastDestinationDeviceId(deviceId)
+    override suspend fun setOrganizeReceivedByType(enabled: Boolean) = dataStore.updateOrganizeReceivedByType(enabled)
+    override suspend fun setAutoCleanTempFiles(enabled: Boolean) = dataStore.updateAutoCleanTempFiles(enabled)
 }

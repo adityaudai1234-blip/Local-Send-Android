@@ -20,12 +20,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -33,15 +32,11 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,8 +49,6 @@ import com.example.domain.model.Device
 import com.example.domain.model.PairedDevice
 import com.example.domain.model.TransferItem
 import com.example.presentation.components.PlatformBadge
-import com.example.presentation.components.PulseScanningIndicator
-import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StatusSuccess
 
 @Composable
@@ -66,17 +59,19 @@ fun DeviceSelectionDialog(
     onSendToDevices: (List<Device>) -> Unit,
     onBackToFiles: () -> Unit,
     onRefreshDiscovery: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    lastDestinationDeviceId: String? = null,
+    onProceedToConfirmation: ((List<Device>) -> Unit)? = null
 ) {
     val totalBytes = files.sumOf { it.size }
     val formattedSize = TransferItem.formatBytes(totalBytes)
 
-    // Build a unified device list from discovered and paired devices
-    val allDevices = remember(discoveredDevices, pairedDevices) {
+    val pairedById = remember(pairedDevices) { pairedDevices.associateBy { it.id } }
+
+    // Build unified device list prioritized by Favorite -> Last Destination -> Online -> Alias
+    val allDevices = remember(discoveredDevices, pairedDevices, lastDestinationDeviceId) {
         val list = mutableListOf<Device>()
-        // Discovered peers take precedence as active
         list.addAll(discoveredDevices)
-        // Add paired devices not currently in discovered list
         val discoveredIds = discoveredDevices.map { it.id }.toSet()
         val discoveredIps = discoveredDevices.map { it.ipAddress }.toSet()
         pairedDevices.forEach { paired ->
@@ -93,13 +88,18 @@ fun DeviceSelectionDialog(
                 )
             }
         }
-        list
+        list.sortedWith(
+            compareByDescending<Device> { pairedById[it.id]?.isFavorite == true }
+                .thenByDescending { it.id == lastDestinationDeviceId }
+                .thenByDescending { it.isOnline }
+                .thenBy { it.alias.lowercase() }
+        )
     }
 
     val selectedDeviceIds = remember {
         mutableStateListOf<String>().apply {
-            // Default select the first available device if present
-            allDevices.firstOrNull()?.let { add(it.id) }
+            val preferred = allDevices.firstOrNull { it.id == lastDestinationDeviceId } ?: allDevices.firstOrNull()
+            preferred?.let { add(it.id) }
         }
     }
 
@@ -179,9 +179,13 @@ fun DeviceSelectionDialog(
                     ) {
                         items(items = allDevices, key = { it.id }) { device ->
                             val isSelected = device.id in selectedDeviceIds
+                            val isFav = pairedById[device.id]?.isFavorite == true
+                            val isLast = device.id == lastDestinationDeviceId
                             SelectableDeviceRow(
                                 device = device,
                                 isSelected = isSelected,
+                                isFavorite = isFav,
+                                isLastUsed = isLast,
                                 onToggle = {
                                     if (isSelected) {
                                         selectedDeviceIds.remove(device.id)
@@ -200,7 +204,11 @@ fun DeviceSelectionDialog(
                 onClick = {
                     val chosen = allDevices.filter { it.id in selectedDeviceIds }
                     if (chosen.isNotEmpty()) {
-                        onSendToDevices(chosen)
+                        if (onProceedToConfirmation != null) {
+                            onProceedToConfirmation(chosen)
+                        } else {
+                            onSendToDevices(chosen)
+                        }
                     }
                 },
                 enabled = selectedDeviceIds.isNotEmpty(),
@@ -214,10 +222,12 @@ fun DeviceSelectionDialog(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (selectedDeviceIds.size > 1) {
-                        "Send to (${selectedDeviceIds.size}) Devices"
-                    } else {
-                        "Send Files"
+                    text = when {
+                        onProceedToConfirmation != null && selectedDeviceIds.size > 1 ->
+                            "Review (${selectedDeviceIds.size}) →"
+                        onProceedToConfirmation != null -> "Review Transfer →"
+                        selectedDeviceIds.size > 1 -> "Send to (${selectedDeviceIds.size}) Devices"
+                        else -> "Send Files"
                     }
                 )
             }
@@ -238,6 +248,8 @@ fun DeviceSelectionDialog(
 private fun SelectableDeviceRow(
     device: Device,
     isSelected: Boolean,
+    isFavorite: Boolean,
+    isLastUsed: Boolean,
     onToggle: () -> Unit
 ) {
     Card(
@@ -279,13 +291,34 @@ private fun SelectableDeviceRow(
             Spacer(modifier = Modifier.width(10.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.alias,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = device.alias,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isFavorite) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "Favorite device",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    if (isLastUsed) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Last used",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "${device.ipAddress}:${device.port}",
@@ -294,7 +327,6 @@ private fun SelectableDeviceRow(
                 )
             }
 
-            // Online indicator dot
             Box(
                 modifier = Modifier
                     .size(8.dp)

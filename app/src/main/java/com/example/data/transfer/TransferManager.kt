@@ -109,10 +109,15 @@ class TransferManager(
                 durationMs = entity.durationMs,
                 checksum = entity.checksum,
                 fileExtension = entity.fileExtension.ifEmpty { entity.fileName.substringAfterLast('.', "") },
-                errorMessage = entity.errorMessage
+                errorMessage = entity.errorMessage,
+                relativePath = entity.relativePath,
+                avgSpeedBytesPerSec = entity.avgSpeedBytesPerSec,
+                peakSpeedBytesPerSec = entity.peakSpeedBytesPerSec
             )
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    var onStateChangedListener: (() -> Unit)? = null
 
     private val transferCancellationFlags = ConcurrentHashMap<String, Boolean>()
     private val transferPauseFlags = ConcurrentHashMap<String, Boolean>()
@@ -160,7 +165,9 @@ class TransferManager(
         val sessionId = payload["sessionId"] as? String ?: UUID.randomUUID().toString()
         val fileId = payload["fileId"] as? String ?: UUID.randomUUID().toString()
         val rawName = payload["fileName"] as? String ?: "file_${System.currentTimeMillis()}"
-        val fileName = SecurityValidator.sanitizeFileName(rawName)
+        val fileName = FileMetadata.sanitizeFileName(rawName)
+        val rawRel = payload["relativePath"] as? String
+        val relativePath = FileMetadata.sanitizeRelativePath(rawRel)
         val fileSize = (payload["fileSize"] as? Number)?.toLong() ?: 0L
         val mimeType = payload["mimeType"] as? String
         val senderName = payload["senderName"] as? String ?: "Remote Device"
@@ -169,7 +176,8 @@ class TransferManager(
             fileId = fileId,
             fileName = fileName,
             fileSize = fileSize,
-            mimeType = mimeType ?: "application/octet-stream"
+            mimeType = mimeType ?: "application/octet-stream",
+            relativePath = relativePath
         )
 
         receiveIncomingFileStream(
@@ -179,6 +187,17 @@ class TransferManager(
             sessionId = sessionId,
             existingInputStream = input
         )
+    }
+
+    /**
+     * Estimates transfer time in seconds using measured historical average throughput.
+     * Returns null when no real baseline speed has been observed yet.
+     */
+    fun estimateTransferSeconds(totalBytes: Long): Long? {
+        if (totalBytes <= 0L) return null
+        val avg = _stats.value.averageSpeedBytesPerSec
+        if (avg <= 0L) return null
+        return (totalBytes / avg).coerceAtLeast(1L)
     }
 
     fun sendFiles(files: List<SelectedFile>, targets: List<Device>) {
@@ -207,7 +226,8 @@ class TransferManager(
                 fileId = fileId,
                 fileName = if (settings.preserveOriginalNames) file.name else "file_${index}_${System.currentTimeMillis()}.${file.extension}",
                 fileSize = file.size,
-                mimeType = file.mimeType
+                mimeType = file.mimeType,
+                relativePath = FileMetadata.sanitizeRelativePath(file.relativePath)
             )
         }
 
@@ -228,7 +248,8 @@ class TransferManager(
                 mimeType = meta.mimeType,
                 senderDevice = settings.deviceName,
                 receiverDevice = target.alias,
-                startTime = now
+                startTime = now,
+                relativePath = meta.relativePath
             )
         }
 
@@ -314,23 +335,27 @@ class TransferManager(
                     socket.soTimeout = settings.connectionTimeoutMs.coerceAtLeast(30_000)
                     val output = BufferedOutputStream(socket.getOutputStream())
 
+                    val payloadMap = mutableMapOf<String, Any>(
+                        "sessionId" to sessionId,
+                        "fileId" to meta.fileId,
+                        "fileIndex" to i,
+                        "fileName" to meta.fileName,
+                        "fileSize" to meta.fileSize,
+                        "mimeType" to meta.mimeType,
+                        "senderName" to settings.deviceName
+                    )
+                    if (!meta.relativePath.isNullOrBlank()) {
+                        payloadMap["relativePath"] = meta.relativePath
+                    }
                     val startMsg = ProtocolMessage(
                         type = ProtocolMessageType.TRANSFER_STARTED,
                         senderId = myId,
                         receiverId = target.id,
-                        payload = mapOf(
-                            "sessionId" to sessionId,
-                            "fileId" to meta.fileId,
-                            "fileIndex" to i,
-                            "fileName" to meta.fileName,
-                            "fileSize" to meta.fileSize,
-                            "mimeType" to meta.mimeType,
-                            "senderName" to settings.deviceName
-                        )
+                        payload = payloadMap
                     )
                     MessageFraming.writeFrame(output, startMsg)
 
-                    val checksumHex = streamSingleFile(
+                    val (checksumHex, peakSpeedBytes) = streamSingleFile(
                         file = file,
                         fileIndex = i,
                         transferId = transferId,
@@ -346,7 +371,9 @@ class TransferManager(
                         direction = TransferDirection.SEND,
                         peer = target,
                         checksum = checksumHex,
-                        startTime = fileStartTime
+                        startTime = fileStartTime,
+                        relativePath = meta.relativePath,
+                        peakSpeedBytesPerSec = peakSpeedBytes
                     )
 
                     if (settings.showNotifications) {
@@ -401,17 +428,20 @@ class TransferManager(
         fileIndex: Int,
         transferId: String,
         output: BufferedOutputStream
-    ): String = withContext(Dispatchers.IO) {
+    ): Pair<String, Long> = withContext(Dispatchers.IO) {
         val inputStream: InputStream = context.contentResolver.openInputStream(file.uri)
             ?: throw IllegalStateException("Could not open input stream for ${file.name}")
 
-        val buffer = ByteArray(FileStreamFraming.DEFAULT_CHUNK_SIZE)
+        val chunkSizeBytes = (settingsRepository.settings.value.transferBufferSizeKb * 1024)
+            .coerceIn(32 * 1024, 256 * 1024)
+        val buffer = ByteArray(chunkSizeBytes)
         val digest = MessageDigest.getInstance("SHA-256")
         var totalRead = 0L
         val fileSize = file.size.coerceAtLeast(1L)
 
         var lastSpeedCalcTime = System.currentTimeMillis()
         var lastBytesRead = 0L
+        var peakSpeedBytesPerSec = 0L
 
         try {
             while (isActive) {
@@ -439,6 +469,9 @@ class TransferManager(
                 if (elapsed >= 500L) {
                     val bytesSinceLast = totalRead - lastBytesRead
                     val speedBytesPerSec = if (elapsed > 0) (bytesSinceLast * 1000L) / elapsed else 0L
+                    if (speedBytesPerSec > peakSpeedBytesPerSec) {
+                        peakSpeedBytesPerSec = speedBytesPerSec
+                    }
                     val currentSpeedStr = "${TransferItem.formatBytes(speedBytesPerSec)}/s"
 
                     lastSpeedCalcTime = now
@@ -471,7 +504,7 @@ class TransferManager(
 
             val sha256Bytes = digest.digest()
             FileStreamFraming.writeEof(output, fileIndex, sha256Bytes)
-            FileStreamFraming.bytesToHex(sha256Bytes)
+            FileStreamFraming.bytesToHex(sha256Bytes) to peakSpeedBytesPerSec
         } finally {
             try {
                 inputStream.close()
@@ -516,7 +549,8 @@ class TransferManager(
             )
         }
 
-        val isPaired = pairedDeviceRepository.getPairedDevice(message.senderId) != null
+        val pairedPeer = pairedDeviceRepository.getPairedDevice(message.senderId)
+        val isPaired = pairedPeer != null
 
         val request = IncomingTransferRequest(
             sessionId = sessionId,
@@ -530,8 +564,11 @@ class TransferManager(
             isTrustedPeer = isPaired
         )
 
-        // Strict policy: autoAcceptTrusted is disabled by default; only auto-accept if explicitly enabled AND trusted AND no suspicious files
-        if (settings.autoAcceptTrusted && isPaired && !request.hasSuspiciousFiles) {
+        // Strict policy: autoAcceptTrusted and per-peer autoAccept are disabled by default;
+        // only auto-accept if explicitly enabled AND trusted AND no suspicious files
+        val allowAutoAccept = (settings.autoAcceptTrusted || (pairedPeer?.autoAccept == true)) &&
+            isPaired && !request.hasSuspiciousFiles
+        if (allowAutoAccept) {
             prepareIncomingReceiving(request)
             return ProtocolMessage(
                 type = ProtocolMessageType.TRANSFER_ACCEPTED,
@@ -606,7 +643,8 @@ class TransferManager(
                 mimeType = meta.mimeType,
                 senderDevice = request.senderName,
                 receiverDevice = myDeviceName,
-                startTime = now
+                startTime = now,
+                relativePath = meta.relativePath
             )
         }
 
@@ -649,13 +687,15 @@ class TransferManager(
         FileTransferService.start(context)
         val tempFile = storageManager.createTempFile(fileMetadata.fileId)
         val fileOutputStream = FileOutputStream(tempFile, false)
-        val buffer = ByteArray(FileStreamFraming.DEFAULT_CHUNK_SIZE)
+        // Allocate receiver buffer large enough for up to 512 KB chunks regardless of local send buffer setting
+        val buffer = ByteArray(FileStreamFraming.DEFAULT_CHUNK_SIZE * 8)
         val digest = MessageDigest.getInstance("SHA-256")
 
         var receivedBytes = 0L
         val fileSize = fileMetadata.fileSize.coerceAtLeast(1L)
         var lastCalcTime = System.currentTimeMillis()
         var lastBytes = 0L
+        var peakSpeedBytesPerSec = 0L
 
         try {
             val input = if (existingInputStream is BufferedInputStream) {
@@ -683,6 +723,9 @@ class TransferManager(
                         val elapsed = now - lastCalcTime
                         if (elapsed >= 500L) {
                             val speed = if (elapsed > 0) ((receivedBytes - lastBytes) * 1000L) / elapsed else 0L
+                            if (speed > peakSpeedBytesPerSec) {
+                                peakSpeedBytesPerSec = speed
+                            }
                             val speedStr = "${TransferItem.formatBytes(speed)}/s"
                             lastCalcTime = now
                             lastBytes = receivedBytes
@@ -720,8 +763,11 @@ class TransferManager(
                         }
 
                         val resolution = storageManager.resolveDestinationWithPolicy(
-                            fileMetadata.fileName,
-                            settings.duplicateHandling
+                            fileName = fileMetadata.fileName,
+                            duplicateHandling = settings.duplicateHandling,
+                            relativePath = fileMetadata.relativePath,
+                            organizeByType = settings.organizeReceivedByType,
+                            mimeType = fileMetadata.mimeType
                         )
 
                         when (resolution) {
@@ -755,7 +801,9 @@ class TransferManager(
                                     peer = peerDevice,
                                     filePath = finalPath,
                                     checksum = calculatedHashHex,
-                                    startTime = receiveStartTime
+                                    startTime = receiveStartTime,
+                                    relativePath = fileMetadata.relativePath,
+                                    peakSpeedBytesPerSec = peakSpeedBytesPerSec
                                 )
 
                                 if (settings.showNotifications) {
@@ -961,11 +1009,13 @@ class TransferManager(
                         peerDeviceName = peer.alias,
                         peerAddress = "${peer.ipAddress}:${peer.port}",
                         errorMessage = reason,
-                        timestamp = now
+                        timestamp = now,
+                        relativePath = existing?.relativePath
                     )
                 )
             }
         }
+        connectionManager.recordError(peer.alias, "${peer.ipAddress}:${peer.port}", reason)
         recalculateStats()
     }
 
@@ -1056,11 +1106,14 @@ class TransferManager(
         peer: Device,
         filePath: String? = null,
         checksum: String? = null,
-        startTime: Long = System.currentTimeMillis()
+        startTime: Long = System.currentTimeMillis(),
+        relativePath: String? = null,
+        peakSpeedBytesPerSec: Long = 0L
     ) {
         val completionTime = System.currentTimeMillis()
         val durationMs = (completionTime - startTime).coerceAtLeast(1L)
         val avgBytesPerSec = (fileSize * 1000L) / durationMs
+        val peak = maxOf(peakSpeedBytesPerSec, avgBytesPerSec)
         val avgSpeed = "${TransferItem.formatBytes(avgBytesPerSec)}/s"
         val myName = settingsRepository.settings.value.deviceName
         val senderDevice = if (direction == TransferDirection.SEND) myName else peer.alias
@@ -1075,7 +1128,10 @@ class TransferManager(
                 checksum = checksum ?: it.checksum,
                 startTime = startTime,
                 completionTime = completionTime,
-                durationMs = durationMs
+                durationMs = durationMs,
+                relativePath = relativePath ?: it.relativePath,
+                avgSpeedBytesPerSec = avgBytesPerSec,
+                peakSpeedBytesPerSec = peak
             )
         }
 
@@ -1098,10 +1154,19 @@ class TransferManager(
             filePath = filePath,
             peerDeviceName = peer.alias,
             peerAddress = "${peer.ipAddress}:${peer.port}",
-            timestamp = completionTime
+            timestamp = completionTime,
+            relativePath = relativePath,
+            avgSpeedBytesPerSec = avgBytesPerSec,
+            peakSpeedBytesPerSec = peak
         )
         transferDao.insert(entity)
         retryableSendMap.remove(id)
+        try {
+            pairedDeviceRepository.incrementUsage(peer.id)
+            if (settingsRepository.settings.value.rememberLastDestination && direction == TransferDirection.SEND) {
+                settingsRepository.setLastDestinationDeviceId(peer.id)
+            }
+        } catch (_: Exception) {}
         recalculateStats()
     }
 
@@ -1154,6 +1219,7 @@ class TransferManager(
             timestamp = completionTime
         )
         transferDao.insert(entity)
+        connectionManager.recordError(peer.alias, "${peer.ipAddress}:${peer.port}", error)
         recalculateStats()
     }
 
@@ -1163,20 +1229,32 @@ class TransferManager(
         val historyIds = historyList.map { it.id }.toSet()
 
         val activeCount = activeList.count { it.status == TransferStatus.ACTIVE || it.status == TransferStatus.PENDING }
-        val completedCount = historyList.count { it.status == TransferStatus.COMPLETED } +
-            activeList.count { it.status == TransferStatus.COMPLETED && it.id !in historyIds }
+        val completedItems = historyList.filter { it.status == TransferStatus.COMPLETED } +
+            activeList.filter { it.status == TransferStatus.COMPLETED && it.id !in historyIds }
+        val completedCount = completedItems.size
         val failedCount = historyList.count { it.status == TransferStatus.FAILED || it.status == TransferStatus.CANCELLED } +
             activeList.count { (it.status == TransferStatus.FAILED || it.status == TransferStatus.CANCELLED) && it.id !in historyIds }
 
-        val totalBytes = historyList.filter { it.status == TransferStatus.COMPLETED }.sumOf { it.fileSize } +
-            activeList.filter { it.status == TransferStatus.COMPLETED && it.id !in historyIds }.sumOf { it.fileSize }
+        val totalBytes = completedItems.sumOf { it.fileSize }
+        val totalDurationMs = completedItems.sumOf { it.durationMs }
+        val avgSpeedBytesPerSec = if (totalDurationMs > 0L && totalBytes > 0L) {
+            (totalBytes * 1000L) / totalDurationMs
+        } else {
+            0L
+        }
+        val peakSpeedBytesPerSec = completedItems.maxOfOrNull {
+            maxOf(it.peakSpeedBytesPerSec, it.avgSpeedBytesPerSec)
+        } ?: 0L
 
         _stats.value = TransferStats(
             activeCount = activeCount,
             completedCount = completedCount,
             failedCount = failedCount,
             totalFilesTransferred = completedCount,
-            totalBytesTransferred = totalBytes
+            totalBytesTransferred = totalBytes,
+            averageSpeedBytesPerSec = avgSpeedBytesPerSec,
+            peakSpeedBytesPerSec = peakSpeedBytesPerSec
         )
+        onStateChangedListener?.invoke()
     }
 }

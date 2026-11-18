@@ -1,5 +1,8 @@
 package com.example.presentation.navigation
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -17,9 +20,14 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,35 +41,98 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.LocalDropApp
+import com.example.domain.model.Device
 import com.example.presentation.ViewModelFactory
 import com.example.presentation.devices.DevicesScreen
 import com.example.presentation.devices.DevicesViewModel
 import com.example.presentation.devices.TrustedDevicesScreen
+import com.example.presentation.diagnostics.DiagnosticsViewModel
+import com.example.presentation.diagnostics.NetworkDiagnosticsScreen
 import com.example.presentation.history.TransferDetailsScreen
 import com.example.presentation.home.HomeScreen
 import com.example.presentation.home.HomeViewModel
+import com.example.presentation.privacy.PrivacyDashboardScreen
 import com.example.presentation.settings.SettingsScreen
 import com.example.presentation.settings.SettingsViewModel
+import com.example.presentation.storage.ReceivedFilesScreen
 import com.example.presentation.storage.StorageManagementScreen
 import com.example.presentation.storage.StorageViewModel
 import com.example.presentation.transfers.TransfersScreen
 import com.example.presentation.transfers.TransfersViewModel
+import com.example.widget.WidgetUpdateHelper
 
 @Composable
 fun MainAppScaffold(
     app: LocalDropApp,
+    sharedUris: List<Uri> = emptyList(),
+    onSharedUrisConsumed: () -> Unit = {},
+    widgetAction: String? = null,
+    widgetTargetDeviceId: String? = null,
+    onWidgetActionConsumed: () -> Unit = {},
     navController: NavHostController = rememberNavController()
 ) {
+    val context = LocalContext.current
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
 
-    val viewModelFactory = ViewModelFactory(app.container)
+    val viewModelFactory = ViewModelFactory(app.container, app.applicationContext)
 
     val homeViewModel: HomeViewModel = viewModel(factory = viewModelFactory)
     val devicesViewModel: DevicesViewModel = viewModel(factory = viewModelFactory)
     val transfersViewModel: TransfersViewModel = viewModel(factory = viewModelFactory)
     val settingsViewModel: SettingsViewModel = viewModel(factory = viewModelFactory)
     val storageViewModel: StorageViewModel = viewModel(factory = viewModelFactory)
+    val diagnosticsViewModel: DiagnosticsViewModel = viewModel(factory = viewModelFactory)
+
+    var widgetTargetPending by remember { mutableStateOf<Device?>(null) }
+    val widgetFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (!uris.isNullOrEmpty()) {
+            homeViewModel.onFilesPicked(uris, context, widgetTargetPending)
+        }
+        widgetTargetPending = null
+    }
+
+    // Handle Android Share Sheet (ACTION_SEND / ACTION_SEND_MULTIPLE)
+    LaunchedEffect(sharedUris) {
+        if (sharedUris.isNotEmpty()) {
+            navController.navigate(Screen.Home.route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+            homeViewModel.onSharedFilesReceived(sharedUris, context)
+            onSharedUrisConsumed()
+        }
+    }
+
+    // Handle Home Screen Glance Widget actions
+    LaunchedEffect(widgetAction, widgetTargetDeviceId) {
+        if (!widgetAction.isNullOrBlank()) {
+            when (widgetAction) {
+                WidgetUpdateHelper.ACTION_VIEW_DEVICES -> {
+                    navController.navigate(Screen.Devices.route) { launchSingleTop = true }
+                }
+                WidgetUpdateHelper.ACTION_VIEW_TRANSFERS -> {
+                    navController.navigate(Screen.Transfers.route) { launchSingleTop = true }
+                }
+                WidgetUpdateHelper.ACTION_OPEN_PICKER -> {
+                    navController.navigate(Screen.Home.route) { launchSingleTop = true }
+                    widgetTargetPending = null
+                    widgetFilePicker.launch(arrayOf("*/*"))
+                }
+                WidgetUpdateHelper.ACTION_QUICK_SEND -> {
+                    navController.navigate(Screen.Home.route) { launchSingleTop = true }
+                    widgetTargetPending = homeViewModel.resolveQuickSendTarget(widgetTargetDeviceId)
+                    widgetFilePicker.launch(arrayOf("*/*"))
+                }
+            }
+            onWidgetActionConsumed()
+        }
+    }
 
     val isTopLevelRoute = Screen.bottomNavItems.any { it.route == currentRoute }
 
@@ -156,6 +227,15 @@ fun MainAppScaffold(
                                     launchSingleTop = true
                                     restoreState = true
                                 }
+                            },
+                            onNavigateToReceivedFiles = {
+                                navController.navigate(Screen.ROUTE_RECEIVED_FILES)
+                            },
+                            onNavigateToDiagnostics = {
+                                navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
+                            },
+                            onNavigateToPrivacyDashboard = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
                             }
                         )
                     }
@@ -189,6 +269,15 @@ fun MainAppScaffold(
                             },
                             onNavigateToStorageManagement = {
                                 navController.navigate(Screen.ROUTE_STORAGE_MANAGEMENT)
+                            },
+                            onNavigateToReceivedFiles = {
+                                navController.navigate(Screen.ROUTE_RECEIVED_FILES)
+                            },
+                            onNavigateToDiagnostics = {
+                                navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
+                            },
+                            onNavigateToPrivacyDashboard = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
                             }
                         )
                     }
@@ -218,6 +307,32 @@ fun MainAppScaffold(
                     composable(Screen.ROUTE_STORAGE_MANAGEMENT) {
                         StorageManagementScreen(
                             viewModel = storageViewModel,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_RECEIVED_FILES) {
+                        ReceivedFilesScreen(
+                            storageManager = app.container.storageManager,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_NETWORK_DIAGNOSTICS) {
+                        NetworkDiagnosticsScreen(
+                            viewModel = diagnosticsViewModel,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_PRIVACY_DASHBOARD) {
+                        PrivacyDashboardScreen(
+                            settingsRepository = app.container.settingsRepository,
+                            pairedDeviceRepository = app.container.pairedDeviceRepository,
+                            connectionManager = app.container.connectionManager,
+                            transferManager = app.container.transferManager,
+                            storageManager = app.container.storageManager,
+                            nsdDiscoveryManager = app.container.nsdDiscoveryManager,
                             onBack = { navController.popBackStack() }
                         )
                     }

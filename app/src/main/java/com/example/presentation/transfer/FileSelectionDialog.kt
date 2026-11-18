@@ -3,11 +3,10 @@ package com.example.presentation.transfer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,19 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -43,16 +35,21 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.TransferItem
+import com.example.presentation.components.FilePreviewDialog
+import com.example.presentation.components.FilePreviewThumbnail
 import java.util.Locale
 
 @Composable
@@ -67,6 +64,7 @@ fun FileSelectionDialog(
     val context = LocalContext.current
     val totalBytes = files.sumOf { it.size }
     val formattedTotalSize = TransferItem.formatBytes(totalBytes)
+    var previewFile by remember { mutableStateOf<SelectedFile?>(null) }
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -74,6 +72,17 @@ fun FileSelectionDialog(
         if (!uris.isNullOrEmpty()) {
             val newFiles = uris.map { SelectedFile.fromUri(context, it) }
             onAddFiles(newFiles)
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            val folderFiles = SelectedFile.fromTreeUri(context, treeUri)
+            if (folderFiles.isNotEmpty()) {
+                onAddFiles(folderFiles)
+            }
         }
     }
 
@@ -133,7 +142,7 @@ fun FileSelectionDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No files selected.",
+                            text = "No files selected. Pick files or an entire folder.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -145,9 +154,10 @@ fun FileSelectionDialog(
                             .heightIn(max = 280.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(items = files, key = { it.uri.toString() }) { file ->
+                        items(items = files, key = { it.uri.toString() + (it.relativePath ?: "") }) { file ->
                             SelectedFileRow(
                                 file = file,
+                                onPreview = { previewFile = file },
                                 onRemove = { onRemoveFile(file) }
                             )
                         }
@@ -156,23 +166,47 @@ fun FileSelectionDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedButton(
-                    onClick = { pickerLauncher.launch(arrayOf("*/*")) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("add_more_files_button"),
-                    shape = RoundedCornerShape(12.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Add More Files",
-                        style = MaterialTheme.typography.labelMedium
-                    )
+                    OutlinedButton(
+                        onClick = { pickerLauncher.launch(arrayOf("*/*")) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("add_more_files_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Add Files",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { folderPickerLauncher.launch(null) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("add_folder_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CreateNewFolder,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Add Folder",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 }
             }
         },
@@ -196,15 +230,30 @@ fun FileSelectionDialog(
             }
         }
     )
+
+    previewFile?.let { file ->
+        FilePreviewDialog(
+            fileName = file.name,
+            fileSizeBytes = file.size,
+            mimeType = file.mimeType,
+            relativeFolder = file.folderDisplayPath,
+            uri = file.uri,
+            onDismiss = { previewFile = null }
+        )
+    }
 }
 
 @Composable
 private fun SelectedFileRow(
     file: SelectedFile,
+    onPreview: () -> Unit,
     onRemove: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onPreview),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -217,20 +266,12 @@ private fun SelectedFileRow(
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = getFileIcon(file.name),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            FilePreviewThumbnail(
+                fileName = file.name,
+                mimeType = file.mimeType,
+                uri = file.uri,
+                size = 40.dp
+            )
 
             Spacer(modifier = Modifier.width(10.dp))
 
@@ -263,12 +304,30 @@ private fun SelectedFileRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                if (!file.folderDisplayPath.isNullOrBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = file.folderDisplayPath.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
 
             IconButton(
                 onClick = onRemove,
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(36.dp)
                     .testTag("remove_file_${file.name}")
             ) {
                 Icon(
@@ -279,18 +338,5 @@ private fun SelectedFileRow(
                 )
             }
         }
-    }
-}
-
-private fun getFileIcon(fileName: String): ImageVector {
-    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
-    return when (ext) {
-        "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp" -> Icons.Default.Image
-        "mp4", "mkv", "mov", "avi", "webm" -> Icons.Default.VideoFile
-        "mp3", "wav", "flac", "m4a", "ogg", "aac" -> Icons.Default.AudioFile
-        "zip", "tar", "gz", "rar", "7z" -> Icons.Default.Archive
-        "kt", "java", "rs", "ts", "js", "html", "css", "py", "c", "cpp", "json" -> Icons.Default.Code
-        "pdf", "doc", "docx", "txt", "md", "xls", "xlsx", "ppt", "pptx" -> Icons.Default.Description
-        else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
 }

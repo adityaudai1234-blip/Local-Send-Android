@@ -1,5 +1,6 @@
 package com.example.domain.repository
 
+import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
 import kotlinx.coroutines.flow.StateFlow
@@ -9,6 +10,7 @@ interface SettingsRepository {
 
     suspend fun setDeviceName(name: String)
     suspend fun setThemeMode(mode: ThemeMode)
+    suspend fun setAccentColor(option: AccentColorOption)
     suspend fun setAutoStartReceiving(enabled: Boolean)
     suspend fun setAutoAcceptTrusted(enabled: Boolean)
     suspend fun setAskBeforeReceiving(enabled: Boolean)
@@ -19,6 +21,7 @@ interface SettingsRepository {
     suspend fun setDiscoveryIntervalSeconds(seconds: Int)
     suspend fun setConnectionTimeoutMs(timeoutMs: Int)
     suspend fun setMaxConcurrent(count: Int)
+    suspend fun setTransferBufferSizeKb(sizeKb: Int)
     suspend fun setDuplicateHandling(handling: String)
     suspend fun setPreserveOriginalNames(enabled: Boolean)
     suspend fun setAutoOpenCompleted(enabled: Boolean)
@@ -26,4 +29,9 @@ interface SettingsRepository {
     suspend fun setRequireApprovalUnknown(enabled: Boolean)
     suspend fun setTlsPreferred(enabled: Boolean)
     suspend fun setHapticsEnabled(enabled: Boolean)
+    suspend fun setSuggestRecentDevices(enabled: Boolean)
+    suspend fun setRememberLastDestination(enabled: Boolean)
+    suspend fun setLastDestinationDeviceId(deviceId: String?)
+    suspend fun setOrganizeReceivedByType(enabled: Boolean)
+    suspend fun setAutoCleanTempFiles(enabled: Boolean)
 }
