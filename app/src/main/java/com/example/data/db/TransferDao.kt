@@ -25,6 +25,12 @@ interface TransferDao {
     @Update
     suspend fun update(entity: TransferEntity)
 
+    @Query("UPDATE transfer_history SET filePath = NULL WHERE filePath = :path")
+    suspend fun clearFilePathForPath(path: String)
+
+    @Query("UPDATE transfer_history SET filePath = NULL WHERE filePath IN (:paths)")
+    suspend fun clearFilePathsForPaths(paths: List<String>)
+
     @Query("DELETE FROM transfer_history WHERE id = :id")
     suspend fun deleteById(id: String)
 

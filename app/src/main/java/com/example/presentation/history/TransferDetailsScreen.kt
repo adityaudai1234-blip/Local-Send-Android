@@ -74,6 +74,7 @@ import com.example.presentation.transfers.TransfersViewModel
 import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusSuccess
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -346,7 +347,11 @@ fun TransferDetailsScreen(
             }
 
             // 5. Actions Row(s)
-            if (item.status == TransferStatus.COMPLETED && !item.filePath.isNullOrBlank()) {
+            val fileExistsOnDisk = remember(item.filePath) {
+                val path = item.filePath
+                !path.isNullOrBlank() && (path.startsWith("content://") || File(path).exists())
+            }
+            if (item.status == TransferStatus.COMPLETED && fileExistsOnDisk) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -374,6 +379,23 @@ fun TransferDetailsScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Share File")
                     }
+                }
+            } else if (item.status == TransferStatus.COMPLETED && !item.filePath.isNullOrBlank()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("details_file_missing_notice"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    )
+                ) {
+                    Text(
+                        text = "File was removed or moved from device storage.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp)
+                    )
                 }
             } else if (item.status == TransferStatus.FAILED || item.status == TransferStatus.CANCELLED) {
                 Button(
@@ -421,7 +443,7 @@ fun TransferDetailsScreen(
                     Text("Delete Entry")
                 }
 
-                if (!item.filePath.isNullOrBlank()) {
+                if (fileExistsOnDisk) {
                     OutlinedButton(
                         onClick = { showDeletePhysicalFileConfirm = true },
                         shape = RoundedCornerShape(12.dp),

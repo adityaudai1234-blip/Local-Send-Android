@@ -54,6 +54,16 @@ data class SelectedFile(
                 }
             } catch (_: Exception) {}
 
+            if (fileSize <= 0L) {
+                try {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        if (afd.length > 0L) {
+                            fileSize = afd.length
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
             val cleanName = FileMetadata.sanitizeFileName(fileName)
             val cleanRelative = FileMetadata.sanitizeRelativePath(relativePath)
 

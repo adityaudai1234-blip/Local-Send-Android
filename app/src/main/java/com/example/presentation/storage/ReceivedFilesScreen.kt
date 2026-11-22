@@ -85,7 +85,8 @@ enum class ReceivedFileSort(val label: String) {
 fun ReceivedFilesScreen(
     storageManager: StorageManager,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFileDeleted: (String) -> Unit = {}
 ) {
     BackHandler(onBack = onBack)
 
@@ -281,10 +282,15 @@ fun ReceivedFilesScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val deleted = storageManager.deleteFile(target.file)
                         pendingDelete = null
-                        reloadFiles()
                         scope.launch {
+                            val deleted = withContext(Dispatchers.IO) {
+                                storageManager.deleteFile(target.file)
+                            }
+                            if (deleted) {
+                                onFileDeleted(target.file.absolutePath)
+                            }
+                            reloadFiles()
                             snackbarHostState.showSnackbar(
                                 if (deleted) "Deleted ${target.name}" else "Could not delete file"
                             )

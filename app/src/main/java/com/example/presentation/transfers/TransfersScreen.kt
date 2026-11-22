@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -101,13 +102,13 @@ fun TransfersScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         item {
-                            Row(
+                            LazyRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                categories.forEach { (cat, label) ->
+                                items(categories, key = { it.first.name }) { (cat, label) ->
                                     val isSelected = selectedCategory == cat
                                     FilterChip(
                                         selected = isSelected,
@@ -116,7 +117,8 @@ fun TransfersScreen(
                                             Text(
                                                 text = label,
                                                 style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                maxLines = 1
                                             )
                                         },
                                         colors = FilterChipDefaults.filterChipColors(

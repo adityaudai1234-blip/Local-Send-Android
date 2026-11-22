@@ -24,7 +24,7 @@ LocalDrop is structured with clean MVVM & repository layering across Android Jet
   * **Transport & TLS**: `TcpServer`, `TcpClient`, `ConnectionManager` (ConnectivityManager `NetworkCallback`, mDNS endpoint synchronization, bounded 3-attempt exponential-backoff reconnection, per-peer latency probing, error ring buffer), and `TlsTransport` (`TLSv1.2`/`TLSv1.3`).
   * **Pairing & Security**: `PairingManager`, `SecurityKeyStore` (Android Keystore AES-256-GCM encryption for peer tokens), and `SecurityValidator` (filename + `relativePath` traversal prevention, rate limiting, auth lockout, port/size checks, suspicious extension flagging).
   * **Persistence**:
-    * **Room (`AppDatabase` v4)**: Stores persistent `TransferEntity` history (including `relativePath`, `avgSpeedBytesPerSec`, `peakSpeedBytesPerSec`, duration, SHA-256 checksum, destination path/URI, failure reason) and `PairedDeviceEntity` (including `isFavorite`, `useCount`, `lastTransferredAt`, per-device opt-in `autoAccept`).
+    * **Room (`AppDatabase` v4 with non-destructive `MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`)**: Stores persistent `TransferEntity` history (including `relativePath`, `avgSpeedBytesPerSec`, `peakSpeedBytesPerSec`, duration, SHA-256 checksum, destination path/URI, failure reason) and `PairedDeviceEntity` (including `isFavorite`, `useCount`, `lastTransferredAt`, per-device opt-in `autoAccept`). Deleting physical files via `StorageViewModel` or `ReceivedFilesScreen` clears stale `filePath` references in Room while deleting a history entry leaves disk files untouched.
     * **DataStore (`SettingsDataStore`)**: Stores all settings categories (`General`, `Network`, `File Transfers`, `Storage`, `Privacy & Security`, `Automation & Smart Suggestions`, `Theme & Accent`, `About`) plus persistent local node UUID and remembered destination device ID.
   * **Transfer Engine**: `TransferManager` + `FileTransferService` (foreground notification service with Cancel action & notification grouping), `FileStreamFraming` (configurable 32–256 KB send chunks, 512 KB receive frame cap + SHA-256), `StorageManager` (folder hierarchy preservation, optional category auto-organization, SAF `DocumentsContract`, `MediaStore`, `FileProvider`), and `TransferNotificationHelper` / `TransferNotificationReceiver`.
 
@@ -43,7 +43,15 @@ Signing keys and credentials are **never** hardcoded in Gradle files or source c
    gradle :app:assembleRelease
    gradle :app:bundleRelease
    ```
-3. To enable full R8 shrinking and obfuscation for store distribution, set `isMinifyEnabled = true` and `isShrinkResources = true` in `app/build.gradle.kts` (`app/proguard-rules.pro` already contains keep rules for Room, Protocol models, Manifest components, ZXing, and Coroutines).
+3. To enable full R8 shrinking and obfuscation for store distribution, set `isMinifyEnabled = true` and `isShrinkResources = true` in `app/build.gradle.kts` (`app/proguard-rules.pro` already contains keep rules for Room, Protocol/Transfer/Network models, Glance Widgets, Manifest components, ZXing, and Coroutines).
+
+---
+
+## 2.1 Battery Optimization & Background Execution Guidance
+
+* **Foreground-Scoped Discovery**: Active NSD/mDNS scanning automatically pauses on `Lifecycle.Event.ON_STOP` and resumes on `Lifecycle.Event.ON_START` (`MainActivity`) to eliminate idle multicast wakeups.
+* **Data Sync Foreground Service**: Multi-file transfers run inside `FileTransferService` (`foregroundServiceType="dataSync"`), preserving transfer reliability when the user switches apps or turns off the screen.
+* **OEM Background Restrictions**: On devices with aggressive OEM background killers (e.g., Xiaomi MIUI, Samsung One UI sleeping apps, OnePlus/OPPO battery savers), users performing unattended long desktop backups should set LocalDrop's battery usage to *Unrestricted* in system App Info settings so sockets are not frozen mid-transfer.
 
 ---
 

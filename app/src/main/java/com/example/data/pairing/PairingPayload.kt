@@ -1,5 +1,6 @@
 package com.example.data.pairing
 
+import com.example.data.security.SecurityValidator
 import org.json.JSONObject
 
 data class PairingPayload(
@@ -34,24 +35,36 @@ data class PairingPayload(
     }
 
     companion object {
+        private val SUPPORTED_VERSIONS = setOf("v1", "v2")
+
+        private fun JSONObject.reqNonNullString(key: String): String? {
+            if (!has(key) || isNull(key)) return null
+            val v = optString(key, "").trim()
+            return v.takeIf { it.isNotEmpty() }
+        }
+
         fun fromJson(jsonStr: String): PairingPayload? {
             return try {
                 val json = JSONObject(jsonStr.trim())
-                val protocolVersion = json.getString("protocolVersion")
-                if (protocolVersion != "v1") return null
+                val protocolVersion = json.reqNonNullString("protocolVersion") ?: return null
+                if (protocolVersion !in SUPPORTED_VERSIONS) return null
 
-                val sessionId = json.getString("sessionId")
-                val pairingToken = json.getString("pairingToken")
-                val deviceId = json.getString("deviceId")
-                val deviceName = json.getString("deviceName")
-                val platform = json.optString("platform", "unknown")
-                val ipAddress = json.getString("ipAddress")
-                val port = json.optInt("port", 53317)
-                val expiresAt = json.getLong("expiresAt")
-
-                if (sessionId.isBlank() || pairingToken.isBlank() || ipAddress.isBlank()) {
-                    return null
+                val sessionId = json.reqNonNullString("sessionId") ?: return null
+                val pairingToken = json.reqNonNullString("pairingToken") ?: return null
+                val deviceId = json.reqNonNullString("deviceId") ?: return null
+                val deviceName = json.reqNonNullString("deviceName") ?: return null
+                val platform = if (json.has("platform") && !json.isNull("platform")) {
+                    json.optString("platform", "unknown").ifBlank { "unknown" }
+                } else {
+                    "unknown"
                 }
+                val ipAddress = json.reqNonNullString("ipAddress") ?: return null
+                val port = if (json.has("port") && !json.isNull("port")) json.getInt("port") else 53317
+                if (!SecurityValidator.isValidPort(port)) return null
+
+                if (!json.has("expiresAt") || json.isNull("expiresAt")) return null
+                val expiresAt = json.getLong("expiresAt")
+                if (expiresAt <= 0L) return null
 
                 PairingPayload(
                     protocolVersion = protocolVersion,

@@ -89,31 +89,68 @@ class TcpServer : NetworkServer {
         }
     }
 
-    private fun handleClient(socket: Socket) {
-        scope.launch {
-            try {
-                socket.soTimeout = 30_000
-                val input = BufferedInputStream(socket.getInputStream())
-                val output = BufferedOutputStream(socket.getOutputStream())
+    private var serverSslContext: javax.net.ssl.SSLContext? = null
 
-                while (isActive && !socket.isClosed && socket.isConnected) {
+    fun configureTlsServerContext(sslContext: javax.net.ssl.SSLContext?) {
+        serverSslContext = sslContext
+    }
+
+    private fun handleClient(initialSocket: Socket) {
+        scope.launch {
+            var activeSocket: Socket = initialSocket
+            try {
+                activeSocket.soTimeout = 120_000
+                var input = BufferedInputStream(activeSocket.getInputStream())
+                var output = BufferedOutputStream(activeSocket.getOutputStream())
+
+                if (TlsTransport.isTlsClientHello(input)) {
+                    val sslContext = serverSslContext
+                    if (sslContext != null) {
+                        val host = activeSocket.inetAddress?.hostAddress ?: "localhost"
+                        val peerPort = activeSocket.port.coerceAtLeast(1)
+                        val wrappedSocket = PeekedInputSocket(activeSocket, input)
+                        val sslSocket = sslContext.socketFactory.createSocket(
+                            wrappedSocket,
+                            host,
+                            peerPort,
+                            true
+                        ) as javax.net.ssl.SSLSocket
+                        sslSocket.useClientMode = false
+                        sslSocket.enabledProtocols = sslSocket.supportedProtocols.filter {
+                            it.startsWith("TLSv1.2") || it.startsWith("TLSv1.3")
+                        }.toTypedArray().ifEmpty { sslSocket.enabledProtocols }
+                        sslSocket.startHandshake()
+                        activeSocket = sslSocket
+                        activeClientSockets.add(sslSocket)
+                        input = BufferedInputStream(sslSocket.getInputStream())
+                        output = BufferedOutputStream(sslSocket.getOutputStream())
+                    } else {
+                        Log.w(
+                            TAG,
+                            "TLS ClientHello received from ${activeSocket.inetAddress?.hostAddress} without configured server KeyStore; closing socket cleanly"
+                        )
+                        return@launch
+                    }
+                }
+
+                while (isActive && !activeSocket.isClosed && activeSocket.isConnected) {
                     val message = MessageFraming.readFrame(input) ?: break
                     if (message.senderId.isBlank()) {
                         Log.w(TAG, "Rejected malformed protocol frame with blank senderId")
                         break
                     }
-                    Log.d(TAG, "Received message type=${message.type} from ${socket.inetAddress?.hostAddress}")
+                    Log.d(TAG, "Received message type=${message.type} from ${activeSocket.inetAddress?.hostAddress}")
 
                     val sHandler = streamMessageHandler
                     if (sHandler != null) {
-                        val response = sHandler.invoke(message, socket, input)
+                        val response = sHandler.invoke(message, activeSocket, input)
                         if (response != null) {
                             MessageFraming.writeFrame(output, response)
                         }
                     } else {
                         val handler = messageHandler
                         if (handler != null) {
-                            val response = handler.invoke(message, socket)
+                            val response = handler.invoke(message, activeSocket)
                             if (response != null) {
                                 MessageFraming.writeFrame(output, response)
                             }
@@ -123,10 +160,16 @@ class TcpServer : NetworkServer {
             } catch (e: Exception) {
                 Log.w(TAG, "Client socket closed or malformed frame: ${e.message}")
             } finally {
-                activeClientSockets.remove(socket)
+                activeClientSockets.remove(initialSocket)
+                activeClientSockets.remove(activeSocket)
                 try {
-                    socket.close()
+                    activeSocket.close()
                 } catch (_: Exception) {}
+                if (activeSocket !== initialSocket) {
+                    try {
+                        initialSocket.close()
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -149,4 +192,25 @@ class TcpServer : NetworkServer {
         serverJob = null
         Log.d(TAG, "TCP Server stopped")
     }
+}
+
+private class PeekedInputSocket(
+    private val delegate: Socket,
+    private val peekedInput: java.io.InputStream
+) : Socket() {
+    override fun getInputStream(): java.io.InputStream = peekedInput
+    override fun getOutputStream(): java.io.OutputStream = delegate.getOutputStream()
+    override fun getInetAddress() = delegate.inetAddress
+    override fun getLocalAddress() = delegate.localAddress
+    override fun getRemoteSocketAddress() = delegate.remoteSocketAddress
+    override fun getLocalSocketAddress() = delegate.localSocketAddress
+    override fun getPort() = delegate.port
+    override fun getLocalPort() = delegate.localPort
+    override fun isConnected() = delegate.isConnected
+    override fun isClosed() = delegate.isClosed
+    override fun setSoTimeout(timeout: Int) {
+        delegate.soTimeout = timeout
+    }
+    override fun getSoTimeout(): Int = delegate.soTimeout
+    override fun close() = delegate.close()
 }

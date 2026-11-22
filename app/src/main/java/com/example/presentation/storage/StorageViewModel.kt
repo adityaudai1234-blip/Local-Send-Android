@@ -75,14 +75,19 @@ class StorageViewModel(
     fun deleteSelectedFiles(paths: Set<String>, onComplete: (Int) -> Unit) {
         viewModelScope.launch {
             val deletedCount = withContext(Dispatchers.IO) {
-                var count = 0
+                val deletedPaths = mutableListOf<String>()
                 paths.forEach { path ->
                     val file = File(path)
                     if (file.exists() && storageManager.deleteFile(file)) {
-                        count++
+                        deletedPaths.add(path)
                     }
                 }
-                count
+                if (deletedPaths.isNotEmpty()) {
+                    deletedPaths.chunked(500).forEach { chunk ->
+                        transferDao.clearFilePathsForPaths(chunk)
+                    }
+                }
+                deletedPaths.size
             }
             refreshStorage()
             onComplete(deletedCount)
@@ -91,7 +96,17 @@ class StorageViewModel(
 
     fun deleteAllReceivedFiles(onComplete: (Int) -> Unit) {
         viewModelScope.launch {
-            val deleted = withContext(Dispatchers.IO) { storageManager.deleteAllReceivedFiles() }
+            val deleted = withContext(Dispatchers.IO) {
+                val beforePaths = storageManager.listReceivedFiles().map { it.absolutePath }
+                val count = storageManager.deleteAllReceivedFiles()
+                val removedPaths = beforePaths.filterNot { File(it).exists() }
+                if (removedPaths.isNotEmpty()) {
+                    removedPaths.chunked(500).forEach { chunk ->
+                        transferDao.clearFilePathsForPaths(chunk)
+                    }
+                }
+                count
+            }
             refreshStorage()
             onComplete(deleted)
         }

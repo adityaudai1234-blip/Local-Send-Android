@@ -31,15 +31,37 @@ data class ProtocolMessage(
     }
 
     companion object {
+        val SUPPORTED_VERSIONS = setOf("v1", "v2")
+
+        private fun JSONObject.optNonNullString(key: String, default: String = ""): String {
+            if (!has(key) || isNull(key)) return default
+            return optString(key, default)
+        }
+
         fun fromJsonString(jsonString: String): ProtocolMessage {
             val json = JSONObject(jsonString)
-            val version = json.optString("version", "v1")
-            val typeStr = json.getString("type")
+            val version = json.optNonNullString("version", "v1").ifBlank { "v1" }
+            if (version !in SUPPORTED_VERSIONS) {
+                throw IllegalArgumentException("Unsupported protocol version: $version")
+            }
+
+            val typeStr = json.optNonNullString("type").trim()
+            if (typeStr.isEmpty()) {
+                throw IllegalArgumentException("Missing or blank protocol message type")
+            }
             val type = ProtocolMessageType.fromString(typeStr)
-            val messageId = json.optString("messageId", UUID.randomUUID().toString())
-            val senderId = json.optString("senderId", "")
-            val receiverId = json.optString("receiverId", "")
-            val timestamp = json.optLong("timestamp", System.currentTimeMillis())
+            val messageId = json.optNonNullString("messageId", UUID.randomUUID().toString())
+                .ifBlank { UUID.randomUUID().toString() }
+            val senderId = json.optNonNullString("senderId", "")
+            val receiverId = json.optNonNullString("receiverId", "")
+            val timestamp = if (json.has("timestamp") && !json.isNull("timestamp")) {
+                json.getLong("timestamp")
+            } else {
+                System.currentTimeMillis()
+            }
+            if (timestamp < 0L) {
+                throw IllegalArgumentException("Negative protocol timestamp: $timestamp")
+            }
 
             val payloadMap = mutableMapOf<String, Any?>()
             val payloadJson = json.optJSONObject("payload")
@@ -47,7 +69,8 @@ data class ProtocolMessage(
                 val keys = payloadJson.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
-                    payloadMap[key] = payloadJson.opt(key)
+                    val raw = payloadJson.opt(key)
+                    payloadMap[key] = if (raw == JSONObject.NULL) null else raw
                 }
             }
 

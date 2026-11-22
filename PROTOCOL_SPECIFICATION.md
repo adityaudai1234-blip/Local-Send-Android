@@ -13,12 +13,14 @@ This specification defines the network framing, message formats, pairing handsha
   * `alias`: User-configured device name.
   * `deviceType`: `android`, `windows`, `macos`, `linux`.
   * `protocol`: `"v2"` (backward compatible with `"v1"` peers).
-  * `version`: Application semantic version (e.g., `"2.0.0"`).
+  * `version`: Application semantic version (e.g., `"2.1.0"`).
   * `deviceModel`: Optional hardware descriptor.
+  * `fingerprint`: Ephemeral node identifier used for self-filtering and mDNS duplicate pruning.
+  * `port`: Advertised service listening port (`1024..65535`).
 * **Control Channel (Length-Prefixed JSON)**:
   * Control messages are preceded by a **4-byte Big-Endian signed 32-bit integer** representing the payload byte length $L$.
   * The next $L$ bytes contain UTF-8 encoded JSON.
-  * Maximum control frame size: `2,097,152` bytes (2 MB); frames exceeding bounds or containing empty `senderId` are rejected immediately.
+  * Maximum control frame size: `2,097,152` bytes (2 MB); frames exceeding bounds, containing empty `senderId`, unsupported protocol `version` (only `"v1"` and `"v2"` accepted), blank `type`, or negative `timestamp` are rejected immediately.
 * **Payload Channel (Binary Chunk Streaming)**:
   * Raw file contents are streamed in configurable binary frames (`DEFAULT_CHUNK_SIZE = 65536` bytes / 64 KB default; sender-selectable `32 KB`, `64 KB`, `128 KB`, or `256 KB` buffers; strict receiver frame cap of `512 KB` = `DEFAULT_CHUNK_SIZE * 8` in `FileStreamFraming`) with magic headers so multi-gigabyte files never buffer entirely in RAM.
 
@@ -34,7 +36,7 @@ Length-Prefixed Control Frame:
 ## 2. TLS Capability Negotiation (v2)
 
 * Peers advertising `protocolVersion = "v2"` and `tlsPreferred = true` support TLS 1.2 / TLS 1.3 over the same TCP socket.
-* Stream handlers inspect the initial byte (`0x16` = TLS ClientHello record vs ASCII length prefix) using `TlsTransport.isTlsClientHello(...)`.
+* `TcpServer` inspects the initial stream byte (`0x16` = TLS ClientHello record vs length-prefixed JSON) via `TlsTransport.isTlsClientHello(...)` **before** control frame decoding. If an `SSLContext` is configured, it upgrades the socket to `SSLSocket`; if no server certificate KeyStore is configured yet, it closes the socket cleanly with a structured warning rather than misinterpreting TLS ClientHello bytes as a frame length.
 * For local self-signed peer certificates exchanged during QR pairing, trust pinning compares the QR-advertised or mutually paired fingerprint before upgrading the socket (`TlsTransport.createClientSslSocketFactory`).
 * Fallback to `v1` unencrypted local LAN framing only happens when a peer explicitly lacks TLS v2 capability and user policy permits it.
 
@@ -71,11 +73,11 @@ All control messages share this JSON structure:
 * `HEARTBEAT`: Ping/pong keepalive packet.
 * `ERROR`: Returns structured error code and human-readable description.
 
-### 4.2 File Transfer Messages (Phase 3, 4 & 5)
+### 4.2 File Transfer Messages (Phase 3, 4, 5 & 6)
 * `TRANSFER_REQUEST`: Sender initiates session with `sessionId`, `files[]` (`fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`), `totalSize`, and optional `tlsPreferred`.
   * `relativePath` (optional UTF-8 POSIX path, e.g., `"TripPhotos/Day1/photo.jpg"`): Enables folder-hierarchy preservation across Android and Tauri desktop peers while remaining 100% optional for legacy v1/v2 flat-file peers.
-* `TRANSFER_ACCEPTED`: Receiver approves the transfer session.
-* `TRANSFER_REJECTED`: Receiver declines (user declined, unknown peer policy, size limit exceeded, or insufficient disk space).
+* `TRANSFER_ACCEPTED`: Receiver approves the transfer session (returned synchronously on the open request socket within the 60s approval window, or accepted asynchronously over a new socket if dispatched externally).
+* `TRANSFER_REJECTED`: Receiver declines (user declined, approval timeout, unknown peer policy, size limit exceeded, or insufficient disk space).
 * `TRANSFER_STARTED`: Sender announces start of a specific file stream on socket (`sessionId`, `fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`, `senderName`).
 * `TRANSFER_PROGRESS`: Optional progress notification.
 * `TRANSFER_PAUSED`: Notifies peer that transfer was paused.

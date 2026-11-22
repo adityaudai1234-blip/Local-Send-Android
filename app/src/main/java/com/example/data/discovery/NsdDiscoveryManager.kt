@@ -54,6 +54,9 @@ class NsdDiscoveryManager(
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private val deviceMap = ConcurrentHashMap<String, Device>()
+    private val simulatedPeerIds = ConcurrentHashMap.newKeySet<String>()
+    private val resolvingServices = ConcurrentHashMap.newKeySet<String>()
+    private val localFingerprint = UUID.randomUUID().toString()
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
 
@@ -77,7 +80,11 @@ class NsdDiscoveryManager(
         resolveWorkerJob?.cancel()
         resolveWorkerJob = scope.launch {
             for (serviceInfo in resolveQueue) {
-                resolveSingleService(serviceInfo)
+                try {
+                    resolveSingleService(serviceInfo)
+                } finally {
+                    resolvingServices.remove(serviceInfo.serviceName)
+                }
                 delay(250)
             }
         }
@@ -88,21 +95,26 @@ class NsdDiscoveryManager(
         periodicCleanupJob = scope.launch {
             while (isActive) {
                 delay((discoveryIntervalSeconds.coerceAtLeast(10)) * 1000L)
-                val staleThreshold = System.currentTimeMillis() - (discoveryIntervalSeconds * 6_000L)
-                var removed = false
-                val iter = deviceMap.entries.iterator()
-                while (iter.hasNext()) {
-                    val entry = iter.next()
-                    if (entry.value.lastSeen < staleThreshold && !entry.value.id.startsWith("tauri-")) {
-                        iter.remove()
-                        removed = true
-                    }
-                }
-                if (removed) {
-                    _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
-                }
+                pruneStalePeers()
             }
         }
+    }
+
+    fun pruneStalePeers(now: Long = System.currentTimeMillis()): Int {
+        val staleThreshold = now - (discoveryIntervalSeconds * 6_000L)
+        var removedCount = 0
+        val iter = deviceMap.entries.iterator()
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (entry.key !in simulatedPeerIds && entry.value.lastSeen < staleThreshold) {
+                iter.remove()
+                removedCount++
+            }
+        }
+        if (removedCount > 0) {
+            _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+        }
+        return removedCount
     }
 
     fun startDiscovery() {
@@ -127,12 +139,17 @@ class NsdDiscoveryManager(
                     if (registeredName != null && service.serviceName.contains(registeredName)) {
                         return
                     }
-                    resolveQueue.trySend(service)
+                    if (resolvingServices.add(service.serviceName)) {
+                        resolveQueue.trySend(service)
+                    }
                 }
 
                 override fun onServiceLost(service: NsdServiceInfo) {
-                    deviceMap.remove(service.serviceName)
-                    _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+                    val removed = deviceMap.remove(service.serviceName) != null
+                    resolvingServices.remove(service.serviceName)
+                    if (removed) {
+                        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+                    }
                 }
 
                 override fun onDiscoveryStopped(serviceType: String) {
@@ -178,26 +195,31 @@ class NsdDiscoveryManager(
                 override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
                     val hostAddress = resolvedInfo.host?.hostAddress ?: ""
                     val localIp = NetworkUtils.getLocalIpv4Address() ?: ""
+                    val attributes = parseAttributes(resolvedInfo)
+                    val fingerprint = attributes[DiscoveryProtocol.KEY_FINGERPRINT]?.takeIf { it.isNotBlank() }
 
                     val isSelf = (currentRegistered != null && resolvedInfo.serviceName.contains(currentRegistered)) ||
-                            (hostAddress.isNotEmpty() && hostAddress == localIp)
+                        (fingerprint != null && fingerprint == localFingerprint) ||
+                        (hostAddress.isNotEmpty() && hostAddress == localIp && resolvedInfo.port == DiscoveryProtocol.DEFAULT_PORT)
 
                     if (isSelf) return
 
-                    val attributes = parseAttributes(resolvedInfo)
                     val alias = attributes[DiscoveryProtocol.KEY_ALIAS]?.takeIf { it.isNotBlank() }
                         ?: resolvedInfo.serviceName.replace("\\.", ".")
                     val deviceTypeStr = attributes[DiscoveryProtocol.KEY_DEVICE_TYPE]
                     val deviceType = DeviceType.fromIdentifier(deviceTypeStr)
-                    val protocol = attributes[DiscoveryProtocol.KEY_PROTOCOL] ?: "v1"
+                    val protocol = attributes[DiscoveryProtocol.KEY_PROTOCOL] ?: DiscoveryProtocol.PROTOCOL_VERSION
                     val model = attributes[DiscoveryProtocol.KEY_DEVICE_MODEL]
+                    val txtPort = attributes[DiscoveryProtocol.KEY_PORT]?.toIntOrNull()
+                    val resolvedPort = if (txtPort != null && txtPort in 1024..65535) txtPort else resolvedInfo.port
+                    val stableId = fingerprint ?: resolvedInfo.serviceName
 
                     val device = Device(
-                        id = resolvedInfo.serviceName,
+                        id = stableId,
                         alias = alias,
                         deviceType = deviceType,
                         ipAddress = hostAddress,
-                        port = resolvedInfo.port,
+                        port = resolvedPort,
                         isOnline = true,
                         lastSeen = System.currentTimeMillis(),
                         protocolVersion = protocol,
@@ -205,8 +227,7 @@ class NsdDiscoveryManager(
                         isSelf = false
                     )
 
-                    deviceMap[resolvedInfo.serviceName] = device
-                    _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+                    upsertResolvedDevice(resolvedInfo.serviceName, device)
                 }
             }
 
@@ -214,6 +235,21 @@ class NsdDiscoveryManager(
         } catch (e: Exception) {
             Log.w(TAG, "Exception during resolve", e)
         }
+    }
+
+    private fun upsertResolvedDevice(serviceKey: String, device: Device) {
+        val duplicateKeys = deviceMap.entries.filter { (key, existing) ->
+            key !in simulatedPeerIds &&
+                key != serviceKey &&
+                (existing.id == device.id ||
+                    (device.ipAddress.isNotBlank() &&
+                        existing.ipAddress == device.ipAddress &&
+                        existing.port == device.port))
+        }.map { it.key }
+        duplicateKeys.forEach { deviceMap.remove(it) }
+
+        deviceMap[serviceKey] = device
+        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
     }
 
     private fun parseAttributes(serviceInfo: NsdServiceInfo): Map<String, String> {
@@ -240,6 +276,7 @@ class NsdDiscoveryManager(
             Log.w(TAG, "Error stopping discovery", e)
         } finally {
             discoveryListener = null
+            resolvingServices.clear()
             _isScanning.value = false
             releaseMulticastLockIfIdle()
         }
@@ -266,9 +303,11 @@ class NsdDiscoveryManager(
                 setPort(port)
                 setAttribute(DiscoveryProtocol.KEY_ALIAS, alias)
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_TYPE, "android")
-                setAttribute(DiscoveryProtocol.KEY_VERSION, "2.0.0")
+                setAttribute(DiscoveryProtocol.KEY_VERSION, "2.1.0")
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_MODEL, "${Build.MANUFACTURER} ${Build.MODEL}")
-                setAttribute(DiscoveryProtocol.KEY_PROTOCOL, DiscoveryProtocol.PROTOCOL_VERSION)
+                setAttribute(DiscoveryProtocol.KEY_PROTOCOL, DiscoveryProtocol.PROTOCOL_VERSION_V2)
+                setAttribute(DiscoveryProtocol.KEY_FINGERPRINT, localFingerprint)
+                setAttribute(DiscoveryProtocol.KEY_PORT, port.toString())
             }
 
             val listener = object : NsdManager.RegistrationListener {
@@ -320,11 +359,18 @@ class NsdDiscoveryManager(
     }
 
     fun addSimulatedPeer(device: Device) {
+        simulatedPeerIds.add(device.id)
         deviceMap[device.id] = device
         _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
     }
 
+    fun upsertDiscoveredPeerForTest(key: String, device: Device) {
+        deviceMap[key] = device
+        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+    }
+
     fun clearDevices() {
+        simulatedPeerIds.clear()
         deviceMap.clear()
         _discoveredDevices.value = emptyList()
     }

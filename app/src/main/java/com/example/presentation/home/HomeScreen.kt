@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -341,15 +342,22 @@ fun HomeScreen(
                     PulseScanningIndicator(isScanning = isScanning)
                 }
 
-                Text(
-                    text = "View All (${discoveredDevices.size})",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .clickable(onClick = onNavigateToDevices)
-                        .padding(4.dp)
-                )
+                        .padding(horizontal = 8.dp)
+                        .testTag("view_all_devices_button")
+                ) {
+                    Text(
+                        text = "View All (${discoveredDevices.size})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
 
@@ -627,9 +635,9 @@ private fun HomeHeaderSection(
                     FilledTonalButton(
                         onClick = onPairClick,
                         shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier
-                            .height(34.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("pair_device_home_button")
                     ) {
                         Icon(

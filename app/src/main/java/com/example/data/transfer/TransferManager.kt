@@ -20,9 +20,12 @@ import com.example.domain.repository.PairedDeviceRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.presentation.transfer.SelectedFile
 import com.example.util.NetworkUtils
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,11 +36,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -62,10 +69,13 @@ class TransferManager(
     companion object {
         private const val TAG = "TransferManager"
         private const val MAX_CONCURRENT_CAP = 5
+        private const val APPROVAL_TIMEOUT_MS = 60_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val concurrencySemaphore = Semaphore(MAX_CONCURRENT_CAP)
+    private val slotMutex = Mutex()
+    private var activeTransferSlots = 0
+    private val slotWaiters = ArrayDeque<CompletableDeferred<Unit>>()
 
     private val _activeTransfers = MutableStateFlow<List<TransferItem>>(emptyList())
     val activeTransfers: StateFlow<List<TransferItem>> = _activeTransfers.asStateFlow()
@@ -122,12 +132,15 @@ class TransferManager(
     private val transferCancellationFlags = ConcurrentHashMap<String, Boolean>()
     private val transferPauseFlags = ConcurrentHashMap<String, Boolean>()
     private val retryableSendMap = ConcurrentHashMap<String, Pair<SelectedFile, Device>>()
+    private val activeTransferSockets = ConcurrentHashMap<String, Socket>()
+    private val activeTransferPeers = ConcurrentHashMap<String, Pair<String, Int>>()
+    private val sessionPeerEndpoints = ConcurrentHashMap<String, Pair<String, Int>>()
+    private val pendingApprovalResponses = ConcurrentHashMap<String, CompletableDeferred<ProtocolMessage>>()
+    private val pendingOutgoingApprovals = ConcurrentHashMap<String, CompletableDeferred<ProtocolMessage>>()
+    private val requestQueueLock = Any()
+    private val incomingRequestQueue = ArrayDeque<IncomingTransferRequest>()
 
     init {
-        scope.launch {
-            // Recovery cleanup of orphaned temp files on startup
-            storageManager.cleanAllTempFiles()
-        }
         scope.launch {
             settingsRepository.settings.collect { currentSettings ->
                 storageManager.setCustomDownloadTreeUri(currentSettings.customDownloadTreeUri)
@@ -140,6 +153,50 @@ class TransferManager(
         }
     }
 
+    private suspend fun acquireTransferSlot(limitProvider: () -> Int) {
+        while (true) {
+            val waiter = slotMutex.withLock {
+                val limit = limitProvider().coerceIn(1, MAX_CONCURRENT_CAP)
+                if (activeTransferSlots < limit) {
+                    activeTransferSlots++
+                    return
+                }
+                CompletableDeferred<Unit>().also { slotWaiters.addLast(it) }
+            }
+            waiter.await()
+        }
+    }
+
+    private suspend fun releaseTransferSlot() {
+        slotMutex.withLock {
+            activeTransferSlots = (activeTransferSlots - 1).coerceAtLeast(0)
+            while (slotWaiters.isNotEmpty()) {
+                slotWaiters.removeFirst().complete(Unit)
+            }
+        }
+    }
+
+    private fun enqueueIncomingRequest(request: IncomingTransferRequest) {
+        synchronized(requestQueueLock) {
+            if (incomingRequestQueue.none { it.sessionId == request.sessionId }) {
+                incomingRequestQueue.addLast(request)
+            }
+            _incomingRequest.value = incomingRequestQueue.firstOrNull()
+        }
+    }
+
+    private fun dequeueIncomingRequest(sessionId: String) {
+        synchronized(requestQueueLock) {
+            val iter = incomingRequestQueue.iterator()
+            while (iter.hasNext()) {
+                if (iter.next().sessionId == sessionId) {
+                    iter.remove()
+                }
+            }
+            _incomingRequest.value = incomingRequestQueue.firstOrNull()
+        }
+    }
+
     suspend fun handleProtocolMessage(
         message: ProtocolMessage,
         socket: Socket,
@@ -147,6 +204,16 @@ class TransferManager(
     ): ProtocolMessage? {
         return when (message.type) {
             ProtocolMessageType.TRANSFER_REQUEST -> handleIncomingTransferRequest(message, socket)
+            ProtocolMessageType.TRANSFER_ACCEPTED,
+            ProtocolMessageType.TRANSFER_REJECTED -> {
+                val sessionId = message.payload["sessionId"] as? String
+                if (!sessionId.isNullOrBlank()) {
+                    pendingOutgoingApprovals.remove(sessionId)?.complete(message)
+                }
+                null
+            }
+            ProtocolMessageType.TRANSFER_PAUSED -> handleIncomingTransferPaused(message)
+            ProtocolMessageType.TRANSFER_RESUMED -> handleIncomingTransferResumed(message)
             ProtocolMessageType.TRANSFER_CANCELLED -> handleIncomingTransferCancelled(message)
             ProtocolMessageType.TRANSFER_STARTED -> {
                 handleIncomingTransferStarted(message, socket, input)
@@ -273,10 +340,22 @@ class TransferManager(
 
         updateTransferItemsStatus(metadataList.map { it.fileId }, TransferStatus.PENDING, "Requesting approval…")
 
-        val timeoutMs = settings.connectionTimeoutMs.coerceIn(5_000, 60_000)
-        val result = client.sendMessage(target.ipAddress, target.port, requestMessage, timeoutMs = timeoutMs)
+        val approvalTimeoutMs = settings.connectionTimeoutMs.coerceAtLeast(APPROVAL_TIMEOUT_MS.toInt() + 5_000)
+        val asyncDeferred = CompletableDeferred<ProtocolMessage>()
+        pendingOutgoingApprovals[sessionId] = asyncDeferred
 
-        result.fold(
+        val result = client.sendMessage(target.ipAddress, target.port, requestMessage, timeoutMs = approvalTimeoutMs)
+
+        val resolvedResult: Result<ProtocolMessage> = if (result.isSuccess) {
+            pendingOutgoingApprovals.remove(sessionId)
+            result
+        } else {
+            val asyncMsg = withTimeoutOrNull(5_000L) { asyncDeferred.await() }
+            pendingOutgoingApprovals.remove(sessionId)
+            if (asyncMsg != null) Result.success(asyncMsg) else result
+        }
+
+        resolvedResult.fold(
             onSuccess = { response ->
                 when (response.type) {
                     ProtocolMessageType.TRANSFER_ACCEPTED -> {
@@ -302,95 +381,67 @@ class TransferManager(
         metadataList: List<FileMetadata>,
         files: List<SelectedFile>,
         target: Device
-    ) {
+    ) = coroutineScope {
         val myId = myDeviceIdProvider()
-        val settings = settingsRepository.settings.value
-        val maxConcurrent = settings.maxConcurrentTransfers.coerceIn(1, MAX_CONCURRENT_CAP)
-        val extraPermitsToHold = (MAX_CONCURRENT_CAP - maxConcurrent).coerceAtLeast(0)
 
         for (i in files.indices) {
             val file = files[i]
             val meta = metadataList[i]
             val transferId = meta.fileId
 
-            if (transferCancellationFlags[transferId] == true) {
-                markTransferCancelled(transferId, target, "Cancelled by user")
-                continue
-            }
-
-            // Respect configured concurrency cap
-            repeat(extraPermitsToHold) { concurrencySemaphore.acquire() }
-            concurrencySemaphore.acquire()
-            try {
-                updateTransferItem(transferId) {
-                    it.copy(status = TransferStatus.ACTIVE, speed = "Connecting…")
+            launch {
+                if (transferCancellationFlags[transferId] == true) {
+                    markTransferCancelled(transferId, target, "Cancelled by user")
+                    return@launch
                 }
 
-                var socket: Socket? = null
-                val fileStartTime = System.currentTimeMillis()
+                acquireTransferSlot { settingsRepository.settings.value.maxConcurrentTransfers }
                 try {
-                    FileTransferService.start(context)
-                    socket = Socket()
-                    socket.connect(InetSocketAddress(target.ipAddress, target.port), settings.connectionTimeoutMs)
-                    socket.soTimeout = settings.connectionTimeoutMs.coerceAtLeast(30_000)
-                    val output = BufferedOutputStream(socket.getOutputStream())
-
-                    val payloadMap = mutableMapOf<String, Any>(
-                        "sessionId" to sessionId,
-                        "fileId" to meta.fileId,
-                        "fileIndex" to i,
-                        "fileName" to meta.fileName,
-                        "fileSize" to meta.fileSize,
-                        "mimeType" to meta.mimeType,
-                        "senderName" to settings.deviceName
-                    )
-                    if (!meta.relativePath.isNullOrBlank()) {
-                        payloadMap["relativePath"] = meta.relativePath
+                    val settings = settingsRepository.settings.value
+                    updateTransferItem(transferId) {
+                        it.copy(status = TransferStatus.ACTIVE, speed = "Connecting…")
                     }
-                    val startMsg = ProtocolMessage(
-                        type = ProtocolMessageType.TRANSFER_STARTED,
-                        senderId = myId,
-                        receiverId = target.id,
-                        payload = payloadMap
-                    )
-                    MessageFraming.writeFrame(output, startMsg)
 
-                    val (checksumHex, peakSpeedBytes) = streamSingleFile(
-                        file = file,
-                        fileIndex = i,
-                        transferId = transferId,
-                        output = output
-                    )
+                    var socket: Socket? = null
+                    val fileStartTime = System.currentTimeMillis()
+                    activeTransferPeers[transferId] = target.ipAddress to target.port
+                    try {
+                        FileTransferService.start(context)
+                        socket = Socket().apply {
+                            connect(InetSocketAddress(target.ipAddress, target.port), settings.connectionTimeoutMs)
+                            soTimeout = maxOf(settings.connectionTimeoutMs, 120_000)
+                        }
+                        activeTransferSockets[transferId] = socket
+                        val output = BufferedOutputStream(socket.getOutputStream())
 
-                    recordTransferCompleted(
-                        id = transferId,
-                        sessionId = sessionId,
-                        fileName = meta.fileName,
-                        fileSize = meta.fileSize,
-                        mimeType = meta.mimeType,
-                        direction = TransferDirection.SEND,
-                        peer = target,
-                        checksum = checksumHex,
-                        startTime = fileStartTime,
-                        relativePath = meta.relativePath,
-                        peakSpeedBytesPerSec = peakSpeedBytes
-                    )
-
-                    if (settings.showNotifications) {
-                        notificationHelper.showTransferComplete(
-                            notificationId = transferId.hashCode(),
-                            fileName = meta.fileName,
-                            totalSize = TransferItem.formatBytes(meta.fileSize),
-                            isSend = true
+                        val payloadMap = mutableMapOf<String, Any>(
+                            "sessionId" to sessionId,
+                            "fileId" to meta.fileId,
+                            "fileIndex" to i,
+                            "fileName" to meta.fileName,
+                            "fileSize" to meta.fileSize,
+                            "mimeType" to meta.mimeType,
+                            "senderName" to settings.deviceName
                         )
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Stream failed for ${meta.fileName}", e)
-                    if (transferCancellationFlags[transferId] == true) {
-                        markTransferCancelled(transferId, target, "Cancelled by user")
-                    } else {
-                        val reason = e.localizedMessage ?: "Stream error"
-                        recordTransferFailed(
+                        if (!meta.relativePath.isNullOrBlank()) {
+                            payloadMap["relativePath"] = meta.relativePath
+                        }
+                        val startMsg = ProtocolMessage(
+                            type = ProtocolMessageType.TRANSFER_STARTED,
+                            senderId = myId,
+                            receiverId = target.id,
+                            payload = payloadMap
+                        )
+                        MessageFraming.writeFrame(output, startMsg)
+
+                        val (checksumHex, peakSpeedBytes) = streamSingleFile(
+                            file = file,
+                            fileIndex = i,
+                            transferId = transferId,
+                            output = output
+                        )
+
+                        recordTransferCompleted(
                             id = transferId,
                             sessionId = sessionId,
                             fileName = meta.fileName,
@@ -398,27 +449,58 @@ class TransferManager(
                             mimeType = meta.mimeType,
                             direction = TransferDirection.SEND,
                             peer = target,
-                            error = reason,
-                            startTime = fileStartTime
+                            checksum = checksumHex,
+                            startTime = fileStartTime,
+                            relativePath = meta.relativePath,
+                            peakSpeedBytesPerSec = peakSpeedBytes
                         )
+
                         if (settings.showNotifications) {
-                            notificationHelper.showTransferFailed(
+                            notificationHelper.showTransferComplete(
                                 notificationId = transferId.hashCode(),
-                                transferId = transferId,
                                 fileName = meta.fileName,
-                                reason = reason,
-                                canRetry = retryableSendMap.containsKey(transferId)
+                                totalSize = TransferItem.formatBytes(meta.fileSize),
+                                isSend = true
                             )
                         }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Stream failed for ${meta.fileName}", e)
+                        if (transferCancellationFlags[transferId] == true) {
+                            markTransferCancelled(transferId, target, "Cancelled by user")
+                        } else {
+                            val reason = e.localizedMessage ?: "Stream error"
+                            recordTransferFailed(
+                                id = transferId,
+                                sessionId = sessionId,
+                                fileName = meta.fileName,
+                                fileSize = meta.fileSize,
+                                mimeType = meta.mimeType,
+                                direction = TransferDirection.SEND,
+                                peer = target,
+                                error = reason,
+                                startTime = fileStartTime
+                            )
+                            if (settings.showNotifications) {
+                                notificationHelper.showTransferFailed(
+                                    notificationId = transferId.hashCode(),
+                                    transferId = transferId,
+                                    fileName = meta.fileName,
+                                    reason = reason,
+                                    canRetry = retryableSendMap.containsKey(transferId)
+                                )
+                            }
+                        }
+                    } finally {
+                        activeTransferSockets.remove(transferId)
+                        activeTransferPeers.remove(transferId)
+                        transferPauseFlags.remove(transferId)
+                        try {
+                            socket?.close()
+                        } catch (_: Exception) {}
                     }
                 } finally {
-                    try {
-                        socket?.close()
-                    } catch (_: Exception) {}
+                    releaseTransferSlot()
                 }
-            } finally {
-                concurrencySemaphore.release()
-                repeat(extraPermitsToHold) { concurrencySemaphore.release() }
             }
         }
     }
@@ -477,7 +559,7 @@ class TransferManager(
                     lastSpeedCalcTime = now
                     lastBytesRead = totalRead
 
-                    val progress = (totalRead.toFloat() / fileSize).coerceIn(0f, 1f)
+                    val progress = (totalRead.toDouble() / fileSize.toDouble()).toFloat().coerceIn(0f, 1f)
                     updateTransferItem(transferId) {
                         it.copy(
                             progress = progress,
@@ -581,47 +663,85 @@ class TransferManager(
             )
         }
 
-        _incomingRequest.value = request
+        sessionPeerEndpoints[sessionId] = senderIp to senderPort
+        request.files.forEach { fileMeta ->
+            activeTransferPeers[fileMeta.fileId] = senderIp to senderPort
+        }
+
+        val approvalDeferred = CompletableDeferred<ProtocolMessage>()
+        pendingApprovalResponses[sessionId] = approvalDeferred
+        enqueueIncomingRequest(request)
         if (settings.showNotifications) {
             notificationHelper.showIncomingTransferRequest(request)
         }
-        return null
+
+        return try {
+            val decision = withTimeoutOrNull(APPROVAL_TIMEOUT_MS) {
+                approvalDeferred.await()
+            }
+            decision ?: ProtocolMessage(
+                type = ProtocolMessageType.TRANSFER_REJECTED,
+                senderId = myDeviceIdProvider(),
+                receiverId = message.senderId,
+                payload = mapOf(
+                    "sessionId" to sessionId,
+                    "reason" to "Approval request timed out"
+                )
+            )
+        } finally {
+            pendingApprovalResponses.remove(sessionId)
+            dequeueIncomingRequest(sessionId)
+        }
     }
 
     fun acceptIncomingTransfer(request: IncomingTransferRequest) {
-        _incomingRequest.value = null
+        dequeueIncomingRequest(request.sessionId)
         notificationHelper.cancelIncomingRequestNotification()
         prepareIncomingReceiving(request)
 
-        scope.launch {
-            val acceptMsg = ProtocolMessage(
-                type = ProtocolMessageType.TRANSFER_ACCEPTED,
-                senderId = myDeviceIdProvider(),
-                receiverId = request.senderId,
-                payload = mapOf(
-                    "sessionId" to request.sessionId,
-                    "accepted" to true
-                )
+        val acceptMsg = ProtocolMessage(
+            type = ProtocolMessageType.TRANSFER_ACCEPTED,
+            senderId = myDeviceIdProvider(),
+            receiverId = request.senderId,
+            payload = mapOf(
+                "sessionId" to request.sessionId,
+                "accepted" to true
             )
-            client.sendOneWay(request.senderIp, request.senderPort, acceptMsg)
+        )
+
+        val deferred = pendingApprovalResponses.remove(request.sessionId)
+        if (deferred != null) {
+            deferred.complete(acceptMsg)
+        } else {
+            scope.launch {
+                client.sendOneWay(request.senderIp, request.senderPort, acceptMsg)
+            }
         }
     }
 
     fun rejectIncomingTransfer(request: IncomingTransferRequest, reason: String = "Declined by user") {
-        _incomingRequest.value = null
+        dequeueIncomingRequest(request.sessionId)
         notificationHelper.cancelIncomingRequestNotification()
+        request.files.forEach { activeTransferPeers.remove(it.fileId) }
+        sessionPeerEndpoints.remove(request.sessionId)
 
-        scope.launch {
-            val rejectMsg = ProtocolMessage(
-                type = ProtocolMessageType.TRANSFER_REJECTED,
-                senderId = myDeviceIdProvider(),
-                receiverId = request.senderId,
-                payload = mapOf(
-                    "sessionId" to request.sessionId,
-                    "reason" to reason
-                )
+        val rejectMsg = ProtocolMessage(
+            type = ProtocolMessageType.TRANSFER_REJECTED,
+            senderId = myDeviceIdProvider(),
+            receiverId = request.senderId,
+            payload = mapOf(
+                "sessionId" to request.sessionId,
+                "reason" to reason
             )
-            client.sendOneWay(request.senderIp, request.senderPort, rejectMsg)
+        )
+
+        val deferred = pendingApprovalResponses.remove(request.sessionId)
+        if (deferred != null) {
+            deferred.complete(rejectMsg)
+        } else {
+            scope.launch {
+                client.sendOneWay(request.senderIp, request.senderPort, rejectMsg)
+            }
         }
     }
 
@@ -685,6 +805,8 @@ class TransferManager(
         }
 
         FileTransferService.start(context)
+        activeTransferSockets[fileMetadata.fileId] = socket
+        sessionPeerEndpoints[sessionId]?.let { activeTransferPeers.putIfAbsent(fileMetadata.fileId, it) }
         val tempFile = storageManager.createTempFile(fileMetadata.fileId)
         val fileOutputStream = FileOutputStream(tempFile, false)
         // Allocate receiver buffer large enough for up to 512 KB chunks regardless of local send buffer setting
@@ -698,6 +820,9 @@ class TransferManager(
         var peakSpeedBytesPerSec = 0L
 
         try {
+            try {
+                socket.soTimeout = 120_000
+            } catch (_: Exception) {}
             val input = if (existingInputStream is BufferedInputStream) {
                 existingInputStream
             } else {
@@ -730,7 +855,7 @@ class TransferManager(
                             lastCalcTime = now
                             lastBytes = receivedBytes
 
-                            val progress = (receivedBytes.toFloat() / fileSize).coerceIn(0f, 1f)
+                            val progress = (receivedBytes.toDouble() / fileSize.toDouble()).toFloat().coerceIn(0f, 1f)
                             updateTransferItem(fileMetadata.fileId) {
                                 it.copy(progress = progress, speed = speedStr)
                             }
@@ -863,16 +988,86 @@ class TransferManager(
                 }
             }
         } finally {
+            activeTransferSockets.remove(fileMetadata.fileId)
+            activeTransferPeers.remove(fileMetadata.fileId)
             try {
                 fileOutputStream.close()
             } catch (_: Exception) {}
         }
     }
 
+    /**
+     * Validates an existing partial temp file before any resume attempt.
+     * Deletes corrupted/unverified temp artifacts and returns true only if the hash matches [expectedSha256Hex].
+     */
+    fun validatePartialTempFile(tempFile: File, expectedSha256Hex: String?): Boolean {
+        if (!tempFile.exists() || tempFile.length() <= 0L || expectedSha256Hex.isNullOrBlank()) {
+            storageManager.cleanTempFile(tempFile)
+            return false
+        }
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buf = ByteArray(32 * 1024)
+            FileInputStream(tempFile).use { input ->
+                while (true) {
+                    val read = input.read(buf)
+                    if (read == -1) break
+                    digest.update(buf, 0, read)
+                }
+            }
+            val actualHex = FileStreamFraming.bytesToHex(digest.digest())
+            val valid = actualHex.equals(expectedSha256Hex, ignoreCase = true)
+            if (!valid) {
+                storageManager.cleanTempFile(tempFile)
+            }
+            valid
+        } catch (_: Exception) {
+            storageManager.cleanTempFile(tempFile)
+            false
+        }
+    }
+
+    private fun notifyPeerTransferControl(transferId: String, type: ProtocolMessageType) {
+        val peer = activeTransferPeers[transferId] ?: return
+        scope.launch {
+            val msg = ProtocolMessage(
+                type = type,
+                senderId = myDeviceIdProvider(),
+                payload = mapOf("fileId" to transferId)
+            )
+            client.sendOneWay(peer.first, peer.second, msg, timeoutMs = 4_000)
+        }
+    }
+
+    private fun handleIncomingTransferPaused(message: ProtocolMessage): ProtocolMessage? {
+        val fileId = message.payload["fileId"] as? String
+        if (!fileId.isNullOrBlank()) {
+            transferPauseFlags[fileId] = true
+            updateTransferItem(fileId) {
+                it.copy(status = TransferStatus.PENDING, speed = "Paused by peer")
+            }
+        }
+        return null
+    }
+
+    private fun handleIncomingTransferResumed(message: ProtocolMessage): ProtocolMessage? {
+        val fileId = message.payload["fileId"] as? String
+        if (!fileId.isNullOrBlank()) {
+            transferPauseFlags[fileId] = false
+            updateTransferItem(fileId) {
+                it.copy(status = TransferStatus.ACTIVE, speed = "Receiving…")
+            }
+        }
+        return null
+    }
+
     private fun handleIncomingTransferCancelled(message: ProtocolMessage): ProtocolMessage? {
         val fileId = message.payload["fileId"] as? String
         if (fileId != null) {
             transferCancellationFlags[fileId] = true
+            try {
+                activeTransferSockets.remove(fileId)?.close()
+            } catch (_: Exception) {}
             val existing = _activeTransfers.value.find { it.id == fileId }
             updateTransferItem(fileId) {
                 it.copy(status = TransferStatus.CANCELLED, errorMessage = "Cancelled by peer", speed = "Cancelled")
@@ -891,6 +1086,7 @@ class TransferManager(
         updateTransferItem(transferId) {
             it.copy(status = TransferStatus.PENDING, speed = "Paused")
         }
+        notifyPeerTransferControl(transferId, ProtocolMessageType.TRANSFER_PAUSED)
     }
 
     fun resumeTransfer(transferId: String) {
@@ -898,10 +1094,15 @@ class TransferManager(
         updateTransferItem(transferId) {
             it.copy(status = TransferStatus.ACTIVE, speed = "Resuming…")
         }
+        notifyPeerTransferControl(transferId, ProtocolMessageType.TRANSFER_RESUMED)
     }
 
     fun cancelTransfer(transferId: String) {
         transferCancellationFlags[transferId] = true
+        notifyPeerTransferControl(transferId, ProtocolMessageType.TRANSFER_CANCELLED)
+        try {
+            activeTransferSockets.remove(transferId)?.close()
+        } catch (_: Exception) {}
         val existing = _activeTransfers.value.find { it.id == transferId }
         updateTransferItem(transferId) {
             it.copy(status = TransferStatus.CANCELLED, errorMessage = "Cancelled by user", speed = "Cancelled")
@@ -919,13 +1120,22 @@ class TransferManager(
         if (retryEntry != null) {
             transferCancellationFlags.remove(transferId)
             transferPauseFlags.remove(transferId)
+            storageManager.cleanTempFile(storageManager.createTempFile(transferId))
             _activeTransfers.update { list -> list.filter { it.id != transferId } }
             scope.launch {
                 transferDao.deleteById(transferId)
                 sendFilesToTarget(listOf(retryEntry.first), retryEntry.second)
             }
-        } else {
+        } else if (transferPauseFlags[transferId] == true) {
             resumeTransfer(transferId)
+        } else {
+            updateTransferItem(transferId) {
+                it.copy(
+                    status = TransferStatus.FAILED,
+                    errorMessage = "Original file handle unavailable after session end; re-select file to resend",
+                    speed = "Failed"
+                )
+            }
         }
     }
 
@@ -1256,5 +1466,17 @@ class TransferManager(
             peakSpeedBytesPerSec = peakSpeedBytesPerSec
         )
         onStateChangedListener?.invoke()
+    }
+
+    fun cleanup() {
+        scope.cancel()
+        activeTransferSockets.values.forEach { socket ->
+            try {
+                socket.close()
+            } catch (_: Exception) {}
+        }
+        activeTransferSockets.clear()
+        pendingApprovalResponses.clear()
+        pendingOutgoingApprovals.clear()
     }
 }

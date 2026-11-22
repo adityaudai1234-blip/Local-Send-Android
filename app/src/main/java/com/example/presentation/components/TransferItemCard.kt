@@ -163,7 +163,7 @@ fun TransferItemCard(
                             IconButton(
                                 onClick = onOpenFile,
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(48.dp)
                                     .testTag("open_file_${item.id}")
                             ) {
                                 Icon(
@@ -178,7 +178,7 @@ fun TransferItemCard(
                             IconButton(
                                 onClick = onShareFile,
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(48.dp)
                                     .testTag("share_file_${item.id}")
                             ) {
                                 Icon(
@@ -194,7 +194,7 @@ fun TransferItemCard(
                             IconButton(
                                 onClick = onPauseResume,
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(48.dp)
                                     .testTag("pause_transfer_${item.id}")
                             ) {
                                 Icon(
@@ -208,7 +208,7 @@ fun TransferItemCard(
                         IconButton(
                             onClick = onCancel,
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(48.dp)
                                 .testTag("cancel_transfer_${item.id}")
                         ) {
                             Icon(
@@ -222,7 +222,7 @@ fun TransferItemCard(
                         IconButton(
                             onClick = onRetry,
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(48.dp)
                                 .testTag("retry_transfer_${item.id}")
                         ) {
                             Icon(

@@ -24,7 +24,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -83,6 +86,7 @@ fun MainAppScaffold(
     val settingsViewModel: SettingsViewModel = viewModel(factory = viewModelFactory)
     val storageViewModel: StorageViewModel = viewModel(factory = viewModelFactory)
     val diagnosticsViewModel: DiagnosticsViewModel = viewModel(factory = viewModelFactory)
+    val coroutineScope = rememberCoroutineScope()
 
     var widgetTargetPending by remember { mutableStateOf<Device?>(null) }
     val widgetFilePicker = rememberLauncherForActivityResult(
@@ -314,7 +318,12 @@ fun MainAppScaffold(
                     composable(Screen.ROUTE_RECEIVED_FILES) {
                         ReceivedFilesScreen(
                             storageManager = app.container.storageManager,
-                            onBack = { navController.popBackStack() }
+                            onBack = { navController.popBackStack() },
+                            onFileDeleted = { deletedPath ->
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    app.container.appDatabase.transferDao().clearFilePathForPath(deletedPath)
+                                }
+                            }
                         )
                     }
 

@@ -15,11 +15,15 @@
 -keep class com.example.data.pairing.PairingPayload { *; }
 -keep class com.example.domain.model.** { *; }
 
-# Components referenced by AndroidManifest.xml
+# Components referenced by AndroidManifest.xml & Widgets
 -keep class com.example.LocalDropApp { *; }
 -keep class com.example.MainActivity { *; }
 -keep class com.example.data.transfer.FileTransferService { *; }
 -keep class com.example.data.transfer.TransferNotificationReceiver { *; }
+-keep class com.example.widget.** { *; }
+-keep class com.example.data.transfer.FileMetadata { *; }
+-keep class com.example.data.transfer.IncomingTransferRequest { *; }
+-keep class com.example.data.network.ConnectionErrorEvent { *; }
 
 # ZXing QR Core
 -keep class com.google.zxing.** { *; }

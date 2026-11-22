@@ -41,6 +41,8 @@ object DiscoveryProtocol {
     const val NSD_SERVICE_TYPE = "_lsend._tcp"
     const val DEFAULT_PORT = 53317
     const val PROTOCOL_VERSION = "v1"
+    const val PROTOCOL_VERSION_V2 = "v2"
+    val SUPPORTED_PROTOCOL_VERSIONS = setOf(PROTOCOL_VERSION, PROTOCOL_VERSION_V2)
 
     // TXT record keys
     const val KEY_ALIAS = "alias"
