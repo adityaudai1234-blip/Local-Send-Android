@@ -11,6 +11,8 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import com.example.domain.model.AppErrorReporter
+import com.example.domain.model.ErrorCategory
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -182,7 +184,12 @@ class StorageManager(private val context: Context) {
                     tempFile.delete()
                     return createdUri.toString()
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppErrorReporter.reportThrowable(
+                    category = ErrorCategory.STORAGE,
+                    throwable = e,
+                    targetLabel = "Custom Download Folder"
+                )
                 // Fall back to standard downloadsDir below
             }
         }
@@ -196,7 +203,12 @@ class StorageManager(private val context: Context) {
                 tempFile.delete()
             }
             destinationFile.absolutePath
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppErrorReporter.reportThrowable(
+                category = ErrorCategory.STORAGE,
+                throwable = e,
+                targetLabel = destinationFile.name
+            )
             null
         }
     }

@@ -9,8 +9,11 @@ import com.example.data.network.NetworkServer
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.protocol.ProtocolMessageType
 import com.example.data.security.SecurityKeyStore
+import com.example.domain.model.AppErrorMapper
+import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.AppSettings
 import com.example.domain.model.DeviceType
+import com.example.domain.model.ErrorCategory
 import com.example.domain.model.PairedDevice
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.util.NetworkUtils
@@ -162,7 +165,15 @@ class PairingManager(
      */
     suspend fun pairWithScannedDevice(payload: PairingPayload) {
         if (payload.isExpired) {
-            _pairingResult.value = PairingResult.Failure("Pairing QR code has expired. Ask peer to regenerate.")
+            val reason = "Pairing QR code has expired. Ask peer to regenerate."
+            AppErrorReporter.report(
+                category = ErrorCategory.PAIRING,
+                userMessage = reason,
+                technicalDetails = "Expired pairing payload for ${payload.deviceName}",
+                targetLabel = payload.deviceName,
+                address = "${payload.ipAddress}:${payload.port}"
+            )
+            _pairingResult.value = PairingResult.Failure(reason)
             return
         }
 
@@ -216,15 +227,37 @@ class PairingManager(
                     }
                     ProtocolMessageType.PAIRING_REJECTED -> {
                         val reason = response.payload["reason"] as? String ?: "Pairing request was rejected by device"
+                        AppErrorReporter.report(
+                            category = ErrorCategory.PAIRING,
+                            userMessage = reason,
+                            technicalDetails = "PAIRING_REJECTED from ${payload.deviceName}",
+                            targetLabel = payload.deviceName,
+                            address = "${payload.ipAddress}:${payload.port}"
+                        )
                         _pairingResult.value = PairingResult.Failure(reason)
                     }
                     else -> {
-                        _pairingResult.value = PairingResult.Failure("Unexpected protocol response: ${response.type}")
+                        val msg = "Unexpected response received while pairing with ${payload.deviceName}."
+                        AppErrorReporter.report(
+                            category = ErrorCategory.PROTOCOL,
+                            userMessage = msg,
+                            technicalDetails = "Unexpected protocol response: ${response.type}",
+                            targetLabel = payload.deviceName,
+                            address = "${payload.ipAddress}:${payload.port}"
+                        )
+                        _pairingResult.value = PairingResult.Failure(msg)
                     }
                 }
             },
             onFailure = { error ->
-                _pairingResult.value = PairingResult.Failure("Could not connect to ${payload.ipAddress}:${payload.port}: ${error.localizedMessage}")
+                val appError = AppErrorMapper.fromThrowable(
+                    category = ErrorCategory.CONNECTION,
+                    throwable = error,
+                    targetLabel = payload.deviceName,
+                    address = "${payload.ipAddress}:${payload.port}"
+                )
+                AppErrorReporter.report(appError)
+                _pairingResult.value = PairingResult.Failure(appError.userMessage)
             }
         )
     }
@@ -329,6 +362,12 @@ class PairingManager(
                 payload = mapOf("status" to "authenticated")
             )
         } else {
+            AppErrorReporter.report(
+                category = ErrorCategory.AUTHENTICATION,
+                userMessage = "Rejected authentication attempt from an unrecognized or reset peer.",
+                technicalDetails = "AUTH_FAILED for peerId=$deviceId",
+                targetLabel = deviceId
+            )
             ProtocolMessage(
                 type = ProtocolMessageType.ERROR,
                 senderId = myDeviceId,

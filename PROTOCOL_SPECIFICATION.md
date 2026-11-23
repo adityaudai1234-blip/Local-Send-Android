@@ -13,7 +13,7 @@ This specification defines the network framing, message formats, pairing handsha
   * `alias`: User-configured device name.
   * `deviceType`: `android`, `windows`, `macos`, `linux`.
   * `protocol`: `"v2"` (backward compatible with `"v1"` peers).
-  * `version`: Application semantic version (e.g., `"2.1.0"`).
+  * `version`: Application semantic version (e.g., `"2.2.0"`).
   * `deviceModel`: Optional hardware descriptor.
   * `fingerprint`: Ephemeral node identifier used for self-filtering and mDNS duplicate pruning.
   * `port`: Advertised service listening port (`1024..65535`).

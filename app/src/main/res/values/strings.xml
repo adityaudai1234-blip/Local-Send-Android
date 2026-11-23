@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">LocalDrop</string>
+    <string name="app_tagline">Private peer-to-peer local network sharing</string>
+    <string name="app_description">Share files directly between Android devices and Tauri desktop applications over your local Wi-Fi or LAN without cloud uploads or accounts.</string>
+
     <string name="nav_home">Home</string>
     <string name="nav_devices">Devices</string>
     <string name="nav_transfers">Transfers</string>
@@ -19,9 +22,15 @@
     <string name="scanning">Scanning…</string>
     <string name="qr_pair_title">Quick QR Pairing</string>
     <string name="qr_pair_desc">Pair quickly with desktop or mobile devices using a QR code</string>
-    
+
     <string name="no_devices_found">No devices found</string>
     <string name="no_devices_hint">Make sure both devices are connected to the same Wi-Fi or local network.</string>
+
+    <string name="onboarding_welcome_message">Share files directly between your devices. Fast, private and without cloud uploads.</string>
+    <string name="onboarding_ready_title">You\'re ready to share files.</string>
+    <string name="permission_camera_rationale">Camera access is needed only to scan pairing QR codes from nearby devices. You can also paste pairing payloads manually without camera access.</string>
+    <string name="permission_notifications_rationale">Notifications alert you when another device wants to send files and show real-time transfer progress.</string>
+    <string name="permission_nearby_wifi_rationale">Nearby Wi-Fi permission allows LocalDrop to discover compatible Android and desktop devices on your local network without requesting location access.</string>
 
     <string name="widget_device_status_desc">View nearby LocalDrop devices and live LAN discovery status</string>
     <string name="widget_quick_send_desc">Quickly send files to a favorite or recent LocalDrop device</string>

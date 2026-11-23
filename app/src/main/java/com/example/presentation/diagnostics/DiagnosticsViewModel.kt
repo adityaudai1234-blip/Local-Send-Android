@@ -7,11 +7,14 @@ import com.example.data.network.ConnectionErrorEvent
 import com.example.data.network.ConnectionManager
 import com.example.data.network.ConnectionState
 import com.example.data.network.NetworkServer
+import com.example.domain.model.AppError
+import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.ConnectionStatus
 import com.example.domain.model.PairedDevice
 import com.example.domain.repository.DeviceDiscoveryRepository
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.domain.repository.SettingsRepository
+import com.example.util.LocalCrashReporter
 import com.example.util.NetworkUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,12 +54,16 @@ class DiagnosticsViewModel(
 ) : ViewModel() {
 
     val recentErrors: StateFlow<List<ConnectionErrorEvent>> = connectionManager.recentErrors
+    val appErrors: StateFlow<List<AppError>> = AppErrorReporter.errors
     val pairedDevices: StateFlow<List<PairedDevice>> = pairedDeviceRepository.pairedDevices
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val connectionStates: StateFlow<Map<String, ConnectionState>> = connectionManager.connectionStates
 
     private val _report = MutableStateFlow(DiagnosticsReport())
     val report: StateFlow<DiagnosticsReport> = _report.asStateFlow()
+
+    private val _lastCrashSummary = MutableStateFlow<String?>(null)
+    val lastCrashSummary: StateFlow<String?> = _lastCrashSummary.asStateFlow()
 
     init {
         refreshStatus()
@@ -99,6 +106,9 @@ class DiagnosticsViewModel(
                 connectedPairedCount = connectedCount,
                 isNetworkMonitorActive = connectionManager.isNetworkMonitorActive.value
             )
+            _lastCrashSummary.value = withContext(Dispatchers.IO) {
+                LocalCrashReporter.readLastCrashSummary(context)
+            }
         }
     }
 
@@ -170,5 +180,15 @@ class DiagnosticsViewModel(
 
     fun clearErrors() {
         connectionManager.clearRecentErrors()
+        AppErrorReporter.clear()
+    }
+
+    fun clearLastCrashSummary() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                LocalCrashReporter.clearLastCrashSummary(context)
+            }
+            _lastCrashSummary.value = null
+        }
     }
 }

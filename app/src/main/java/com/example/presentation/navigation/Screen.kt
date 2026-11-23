@@ -52,6 +52,9 @@ sealed class Screen(
         const val ROUTE_RECEIVED_FILES = "received_files"
         const val ROUTE_NETWORK_DIAGNOSTICS = "network_diagnostics"
         const val ROUTE_PRIVACY_DASHBOARD = "privacy_dashboard"
+        const val ROUTE_ONBOARDING = "onboarding"
+        const val ROUTE_PRIVACY_POLICY = "privacy_policy"
+        const val ROUTE_ABOUT = "about"
 
         fun transferDetailsRoute(transferId: String): String = "transfer_details/$transferId"
 

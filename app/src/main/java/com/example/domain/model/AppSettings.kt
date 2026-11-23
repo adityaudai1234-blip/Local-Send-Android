@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import com.example.BuildConfig
+
 enum class ThemeMode {
     SYSTEM,
     LIGHT,
@@ -18,6 +20,9 @@ data class AppSettings(
     val deviceName: String,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val accentColor: AccentColorOption = AccentColorOption.TEAL,
+    val appLanguage: String = "System Default",
+    val hasCompletedOnboarding: Boolean = false,
+    val lastSeenReleaseVersion: String = "",
     val autoStartReceiving: Boolean = false,
     val autoAcceptTrusted: Boolean = false, // Mandated: disabled by default
     val askBeforeReceiving: Boolean = true,
@@ -26,6 +31,9 @@ data class AppSettings(
     val port: Int = 53317,
     val broadcastEnabled: Boolean = true,
     val showNotifications: Boolean = true,
+    val notifyIncomingRequests: Boolean = true,
+    val notifyTransferProgress: Boolean = true,
+    val notifyTransferComplete: Boolean = true,
     val discoveryIntervalSeconds: Int = 10,
     val connectionTimeoutMs: Int = 15000,
     val maxConcurrentTransfers: Int = 2,
@@ -42,7 +50,7 @@ data class AppSettings(
     val lastDestinationDeviceId: String? = null,
     val organizeReceivedByType: Boolean = false,
     val autoCleanTempFiles: Boolean = true,
-    val appVersion: String = "2.1.0",
-    val buildNumber: String = "5",
+    val appVersion: String = BuildConfig.VERSION_NAME,
+    val buildNumber: String = BuildConfig.VERSION_CODE.toString(),
     val protocolVersion: String = "v2"
 )

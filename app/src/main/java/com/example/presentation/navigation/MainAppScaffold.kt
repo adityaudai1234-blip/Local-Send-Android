@@ -21,13 +21,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,18 +42,23 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.BuildConfig
 import com.example.LocalDropApp
 import com.example.domain.model.Device
 import com.example.presentation.ViewModelFactory
+import com.example.presentation.about.AboutScreen
+import com.example.presentation.components.ReleaseNotesDialog
 import com.example.presentation.devices.DevicesScreen
 import com.example.presentation.devices.DevicesViewModel
-import com.example.presentation.devices.TrustedDevicesScreen
 import com.example.presentation.diagnostics.DiagnosticsViewModel
 import com.example.presentation.diagnostics.NetworkDiagnosticsScreen
 import com.example.presentation.history.TransferDetailsScreen
 import com.example.presentation.home.HomeScreen
 import com.example.presentation.home.HomeViewModel
+import com.example.presentation.onboarding.OnboardingNextAction
+import com.example.presentation.onboarding.OnboardingScreen
 import com.example.presentation.privacy.PrivacyDashboardScreen
+import com.example.presentation.privacy.PrivacyPolicyScreen
 import com.example.presentation.settings.SettingsScreen
 import com.example.presentation.settings.SettingsViewModel
 import com.example.presentation.storage.ReceivedFilesScreen
@@ -63,6 +67,8 @@ import com.example.presentation.storage.StorageViewModel
 import com.example.presentation.transfers.TransfersScreen
 import com.example.presentation.transfers.TransfersViewModel
 import com.example.widget.WidgetUpdateHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @Composable
 fun MainAppScaffold(
@@ -87,6 +93,28 @@ fun MainAppScaffold(
     val storageViewModel: StorageViewModel = viewModel(factory = viewModelFactory)
     val diagnosticsViewModel: DiagnosticsViewModel = viewModel(factory = viewModelFactory)
     val coroutineScope = rememberCoroutineScope()
+
+    val settings by settingsViewModel.settings.collectAsState()
+    val settingsLoaded by app.container.settingsRepository.isLoaded.collectAsState()
+
+    var initialOnboardingChecked by remember { mutableStateOf(false) }
+    LaunchedEffect(settingsLoaded, settings.hasCompletedOnboarding, sharedUris, widgetAction) {
+        if (settingsLoaded && !initialOnboardingChecked) {
+            initialOnboardingChecked = true
+            if (!settings.hasCompletedOnboarding && sharedUris.isEmpty() && widgetAction.isNullOrBlank()) {
+                navController.navigate(Screen.ROUTE_ONBOARDING) {
+                    launchSingleTop = true
+                }
+            }
+        }
+    }
+
+    var releaseNotesDismissedInSession by remember { mutableStateOf(false) }
+    val shouldShowWhatsNew = settingsLoaded &&
+        settings.hasCompletedOnboarding &&
+        !releaseNotesDismissedInSession &&
+        currentRoute != Screen.ROUTE_ONBOARDING &&
+        settings.lastSeenReleaseVersion != BuildConfig.VERSION_NAME
 
     var widgetTargetPending by remember { mutableStateOf<Device?>(null) }
     val widgetFilePicker = rememberLauncherForActivityResult(
@@ -282,6 +310,80 @@ fun MainAppScaffold(
                             },
                             onNavigateToPrivacyDashboard = {
                                 navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
+                            },
+                            onNavigateToPrivacyPolicy = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                            },
+                            onNavigateToAbout = {
+                                navController.navigate(Screen.ROUTE_ABOUT)
+                            },
+                            onNavigateToOnboarding = {
+                                navController.navigate(Screen.ROUTE_ONBOARDING)
+                            }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_ONBOARDING) {
+                        OnboardingScreen(
+                            settingsViewModel = settingsViewModel,
+                            onOpenPrivacyPolicy = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                            },
+                            onFinishOnboarding = { action ->
+                                // Mark current release version seen when completing fresh onboarding
+                                settingsViewModel.updateLastSeenReleaseVersion(BuildConfig.VERSION_NAME)
+                                when (action) {
+                                    OnboardingNextAction.FIND_DEVICES -> {
+                                        navController.navigate(Screen.Devices.route) {
+                                            popUpTo(Screen.Home.route) { inclusive = false }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                    OnboardingNextAction.SEND_FILES -> {
+                                        navController.navigate(Screen.Home.route) {
+                                            popUpTo(Screen.Home.route) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                        widgetTargetPending = null
+                                        widgetFilePicker.launch(arrayOf("*/*"))
+                                    }
+                                    OnboardingNextAction.RECEIVE_FILES -> {
+                                        if (!homeViewModel.isReceivingActive.value) {
+                                            homeViewModel.toggleReceiving()
+                                        }
+                                        navController.navigate(Screen.Home.route) {
+                                            popUpTo(Screen.Home.route) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                    OnboardingNextAction.HOME -> {
+                                        navController.navigate(Screen.Home.route) {
+                                            popUpTo(Screen.Home.route) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_PRIVACY_POLICY) {
+                        PrivacyPolicyScreen(
+                            onBack = { navController.popBackStack() },
+                            onOpenPrivacyDashboard = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
+                            }
+                        )
+                    }
+
+                    composable(Screen.ROUTE_ABOUT) {
+                        AboutScreen(
+                            onBack = { navController.popBackStack() },
+                            onOpenPrivacyPolicy = {
+                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                            },
+                            onReplayOnboarding = {
+                                navController.navigate(Screen.ROUTE_ONBOARDING)
                             }
                         )
                     }
@@ -302,7 +404,7 @@ fun MainAppScaffold(
                     }
 
                     composable(Screen.ROUTE_TRUSTED_DEVICES) {
-                        TrustedDevicesScreen(
+                        com.example.presentation.devices.TrustedDevicesScreen(
                             viewModel = devicesViewModel,
                             onBack = { navController.popBackStack() }
                         )
@@ -348,5 +450,14 @@ fun MainAppScaffold(
                 }
             }
         }
+    }
+
+    if (shouldShowWhatsNew) {
+        ReleaseNotesDialog(
+            onDismiss = {
+                releaseNotesDismissedInSession = true
+                settingsViewModel.updateLastSeenReleaseVersion(BuildConfig.VERSION_NAME)
+            }
+        )
     }
 }

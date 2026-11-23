@@ -3,6 +3,9 @@ package com.example
 import android.app.Application
 import com.example.di.AppContainer
 import com.example.di.DefaultAppContainer
+import com.example.domain.model.AppErrorReporter
+import com.example.domain.model.ErrorCategory
+import com.example.util.LocalCrashReporter
 import com.example.widget.WidgetUpdateHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,15 +25,24 @@ class LocalDropApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        LocalCrashReporter.install(this)
         container = DefaultAppContainer(this)
 
         // Startup recovery & optional temp file maintenance
         appScope.launch {
-            val currentSettings = container.settingsRepository.settings.first()
-            if (currentSettings.autoCleanTempFiles) {
-                container.storageManager.cleanAllTempFiles()
-            } else {
-                container.storageManager.cleanStaleTempFiles()
+            try {
+                val currentSettings = container.settingsRepository.settings.first()
+                if (currentSettings.autoCleanTempFiles) {
+                    container.storageManager.cleanAllTempFiles()
+                } else {
+                    container.storageManager.cleanStaleTempFiles()
+                }
+            } catch (e: Exception) {
+                AppErrorReporter.reportThrowable(
+                    category = ErrorCategory.STORAGE,
+                    throwable = e,
+                    targetLabel = "Startup Storage Check"
+                )
             }
         }
 
@@ -60,13 +72,22 @@ class LocalDropApp : Application() {
                 .map { it.port }
                 .distinctUntilChanged()
                 .collect { port ->
-                    val currentPort = container.tcpServer.listeningPort.value
-                    val isRunning = container.tcpServer.isRunning.value
-                    if (!isRunning || currentPort != port) {
-                        if (isRunning) {
-                            container.tcpServer.stop()
+                    try {
+                        val currentPort = container.tcpServer.listeningPort.value
+                        val isRunning = container.tcpServer.isRunning.value
+                        if (!isRunning || currentPort != port) {
+                            if (isRunning) {
+                                container.tcpServer.stop()
+                            }
+                            container.tcpServer.start(port)
                         }
-                        container.tcpServer.start(port)
+                    } catch (e: Exception) {
+                        AppErrorReporter.reportThrowable(
+                            category = ErrorCategory.CONNECTION,
+                            throwable = e,
+                            targetLabel = "Local TCP Listener",
+                            address = "Port $port"
+                        )
                     }
                 }
         }

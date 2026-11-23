@@ -1,21 +1,17 @@
 package com.example
 
-import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.IntentCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -55,12 +51,17 @@ class MainActivity : ComponentActivity() {
     private val widgetTargetIdState = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleIncomingIntent(intent)
 
         val app = application as LocalDropApp
         val settingsRepo = app.container.settingsRepository
+        val splashStartMs = System.currentTimeMillis()
+        splashScreen.setKeepOnScreenCondition {
+            !settingsRepo.isLoaded.value && (System.currentTimeMillis() - splashStartMs < 1_500L)
+        }
 
         setContent {
             val settings by settingsRepo.settings.collectAsState()
@@ -83,22 +84,6 @@ class MainActivity : ComponentActivity() {
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose {
                     lifecycleOwner.lifecycle.removeObserver(observer)
-                }
-            }
-
-            // Request nearby wifi devices / notification permission on Android 13+
-            val permissionLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.RequestMultiplePermissions()
-            ) { /* Permissions result handled gracefully */ }
-
-            LaunchedEffect(Unit) {
-                val permissionsToRequest = mutableListOf<String>()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    permissionsToRequest.add(Manifest.permission.NEARBY_WIFI_DEVICES)
-                    permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                if (permissionsToRequest.isNotEmpty()) {
-                    permissionLauncher.launch(permissionsToRequest.toTypedArray())
                 }
             }
 

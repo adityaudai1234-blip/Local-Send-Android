@@ -615,10 +615,14 @@ class Phase6ProtocolAndStressTest {
     private class InMemorySettingsRepository(initial: AppSettings) : SettingsRepository {
         private val _settings = MutableStateFlow(initial)
         override val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+        override val isLoaded: StateFlow<Boolean> = MutableStateFlow(true)
 
         override suspend fun setDeviceName(name: String) { _settings.value = _settings.value.copy(deviceName = name) }
         override suspend fun setThemeMode(mode: ThemeMode) { _settings.value = _settings.value.copy(themeMode = mode) }
         override suspend fun setAccentColor(option: AccentColorOption) { _settings.value = _settings.value.copy(accentColor = option) }
+        override suspend fun setAppLanguage(language: String) { _settings.value = _settings.value.copy(appLanguage = language) }
+        override suspend fun setHasCompletedOnboarding(completed: Boolean) { _settings.value = _settings.value.copy(hasCompletedOnboarding = completed) }
+        override suspend fun setLastSeenReleaseVersion(version: String) { _settings.value = _settings.value.copy(lastSeenReleaseVersion = version) }
         override suspend fun setAutoStartReceiving(enabled: Boolean) { _settings.value = _settings.value.copy(autoStartReceiving = enabled) }
         override suspend fun setAutoAcceptTrusted(enabled: Boolean) { _settings.value = _settings.value.copy(autoAcceptTrusted = enabled) }
         override suspend fun setAskBeforeReceiving(enabled: Boolean) { _settings.value = _settings.value.copy(askBeforeReceiving = enabled) }
@@ -628,6 +632,9 @@ class Phase6ProtocolAndStressTest {
         override suspend fun setPort(port: Int) { _settings.value = _settings.value.copy(port = port) }
         override suspend fun setBroadcastEnabled(enabled: Boolean) { _settings.value = _settings.value.copy(broadcastEnabled = enabled) }
         override suspend fun setShowNotifications(enabled: Boolean) { _settings.value = _settings.value.copy(showNotifications = enabled) }
+        override suspend fun setNotifyIncomingRequests(enabled: Boolean) { _settings.value = _settings.value.copy(notifyIncomingRequests = enabled) }
+        override suspend fun setNotifyTransferProgress(enabled: Boolean) { _settings.value = _settings.value.copy(notifyTransferProgress = enabled) }
+        override suspend fun setNotifyTransferComplete(enabled: Boolean) { _settings.value = _settings.value.copy(notifyTransferComplete = enabled) }
         override suspend fun setDiscoveryIntervalSeconds(seconds: Int) { _settings.value = _settings.value.copy(discoveryIntervalSeconds = seconds) }
         override suspend fun setConnectionTimeoutMs(timeoutMs: Int) { _settings.value = _settings.value.copy(connectionTimeoutMs = timeoutMs) }
         override suspend fun setMaxConcurrent(count: Int) { _settings.value = _settings.value.copy(maxConcurrentTransfers = count) }

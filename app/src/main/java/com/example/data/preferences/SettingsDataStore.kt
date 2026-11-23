@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.BuildConfig
 import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
@@ -25,6 +26,9 @@ class SettingsDataStore(private val context: Context) {
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_COLOR = stringPreferencesKey("accent_color")
+        val APP_LANGUAGE = stringPreferencesKey("app_language")
+        val HAS_COMPLETED_ONBOARDING = booleanPreferencesKey("has_completed_onboarding")
+        val LAST_SEEN_RELEASE_VERSION = stringPreferencesKey("last_seen_release_version")
         val AUTO_START_RECEIVING = booleanPreferencesKey("auto_start_receiving")
         val AUTO_ACCEPT_TRUSTED = booleanPreferencesKey("auto_accept_trusted")
         val ASK_BEFORE_RECEIVING = booleanPreferencesKey("ask_before_receiving")
@@ -33,6 +37,9 @@ class SettingsDataStore(private val context: Context) {
         val PORT = intPreferencesKey("port")
         val BROADCAST_ENABLED = booleanPreferencesKey("broadcast_enabled")
         val SHOW_NOTIFICATIONS = booleanPreferencesKey("show_notifications")
+        val NOTIFY_INCOMING_REQUESTS = booleanPreferencesKey("notify_incoming_requests")
+        val NOTIFY_TRANSFER_PROGRESS = booleanPreferencesKey("notify_transfer_progress")
+        val NOTIFY_TRANSFER_COMPLETE = booleanPreferencesKey("notify_transfer_complete")
         val DISCOVERY_INTERVAL = intPreferencesKey("discovery_interval")
         val CONNECTION_TIMEOUT = intPreferencesKey("connection_timeout")
         val MAX_CONCURRENT = intPreferencesKey("max_concurrent")
@@ -95,6 +102,9 @@ class SettingsDataStore(private val context: Context) {
             deviceName = prefs[PreferencesKeys.DEVICE_NAME] ?: defaultDeviceName,
             themeMode = themeMode,
             accentColor = accentColor,
+            appLanguage = prefs[PreferencesKeys.APP_LANGUAGE] ?: "System Default",
+            hasCompletedOnboarding = prefs[PreferencesKeys.HAS_COMPLETED_ONBOARDING] ?: false,
+            lastSeenReleaseVersion = prefs[PreferencesKeys.LAST_SEEN_RELEASE_VERSION] ?: "",
             autoStartReceiving = prefs[PreferencesKeys.AUTO_START_RECEIVING] ?: false,
             autoAcceptTrusted = prefs[PreferencesKeys.AUTO_ACCEPT_TRUSTED] ?: false,
             askBeforeReceiving = prefs[PreferencesKeys.ASK_BEFORE_RECEIVING] ?: true,
@@ -103,6 +113,9 @@ class SettingsDataStore(private val context: Context) {
             port = prefs[PreferencesKeys.PORT] ?: 53317,
             broadcastEnabled = prefs[PreferencesKeys.BROADCAST_ENABLED] ?: true,
             showNotifications = prefs[PreferencesKeys.SHOW_NOTIFICATIONS] ?: true,
+            notifyIncomingRequests = prefs[PreferencesKeys.NOTIFY_INCOMING_REQUESTS] ?: true,
+            notifyTransferProgress = prefs[PreferencesKeys.NOTIFY_TRANSFER_PROGRESS] ?: true,
+            notifyTransferComplete = prefs[PreferencesKeys.NOTIFY_TRANSFER_COMPLETE] ?: true,
             discoveryIntervalSeconds = prefs[PreferencesKeys.DISCOVERY_INTERVAL] ?: 10,
             connectionTimeoutMs = prefs[PreferencesKeys.CONNECTION_TIMEOUT] ?: 15000,
             maxConcurrentTransfers = prefs[PreferencesKeys.MAX_CONCURRENT] ?: 2,
@@ -119,8 +132,8 @@ class SettingsDataStore(private val context: Context) {
             lastDestinationDeviceId = prefs[PreferencesKeys.LAST_DESTINATION_DEVICE_ID],
             organizeReceivedByType = prefs[PreferencesKeys.ORGANIZE_RECEIVED_BY_TYPE] ?: false,
             autoCleanTempFiles = prefs[PreferencesKeys.AUTO_CLEAN_TEMP_FILES] ?: true,
-            appVersion = "2.1.0",
-            buildNumber = "5",
+            appVersion = BuildConfig.VERSION_NAME,
+            buildNumber = BuildConfig.VERSION_CODE.toString(),
             protocolVersion = "v2"
         )
     }
@@ -135,6 +148,18 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateAccentColor(option: AccentColorOption) {
         context.dataStore.edit { it[PreferencesKeys.ACCENT_COLOR] = option.name }
+    }
+
+    suspend fun updateAppLanguage(language: String) {
+        context.dataStore.edit { it[PreferencesKeys.APP_LANGUAGE] = language }
+    }
+
+    suspend fun updateHasCompletedOnboarding(completed: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.HAS_COMPLETED_ONBOARDING] = completed }
+    }
+
+    suspend fun updateLastSeenReleaseVersion(version: String) {
+        context.dataStore.edit { it[PreferencesKeys.LAST_SEEN_RELEASE_VERSION] = version }
     }
 
     suspend fun updateAutoStartReceiving(enabled: Boolean) {
@@ -170,6 +195,18 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateShowNotifications(enabled: Boolean) {
         context.dataStore.edit { it[PreferencesKeys.SHOW_NOTIFICATIONS] = enabled }
+    }
+
+    suspend fun updateNotifyIncomingRequests(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.NOTIFY_INCOMING_REQUESTS] = enabled }
+    }
+
+    suspend fun updateNotifyTransferProgress(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.NOTIFY_TRANSFER_PROGRESS] = enabled }
+    }
+
+    suspend fun updateNotifyTransferComplete(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.NOTIFY_TRANSFER_COMPLETE] = enabled }
     }
 
     suspend fun updateDiscoveryIntervalSeconds(seconds: Int) {

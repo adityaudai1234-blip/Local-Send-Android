@@ -71,6 +71,9 @@ class SettingsViewModel(
     fun updateDeviceName(name: String) = viewModelScope.launch { settingsRepository.setDeviceName(name) }
     fun updateThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepository.setThemeMode(mode) }
     fun updateAccentColor(option: AccentColorOption) = viewModelScope.launch { settingsRepository.setAccentColor(option) }
+    fun updateAppLanguage(language: String) = viewModelScope.launch { settingsRepository.setAppLanguage(language) }
+    fun updateHasCompletedOnboarding(completed: Boolean) = viewModelScope.launch { settingsRepository.setHasCompletedOnboarding(completed) }
+    fun updateLastSeenReleaseVersion(version: String) = viewModelScope.launch { settingsRepository.setLastSeenReleaseVersion(version) }
     fun updateAutoStartReceiving(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoStartReceiving(enabled) }
     fun updateAutoAcceptTrusted(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoAcceptTrusted(enabled) }
     fun updateAskBeforeReceiving(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAskBeforeReceiving(enabled) }
@@ -87,6 +90,9 @@ class SettingsViewModel(
         }
     }
     fun updateShowNotifications(enabled: Boolean) = viewModelScope.launch { settingsRepository.setShowNotifications(enabled) }
+    fun updateNotifyIncomingRequests(enabled: Boolean) = viewModelScope.launch { settingsRepository.setNotifyIncomingRequests(enabled) }
+    fun updateNotifyTransferProgress(enabled: Boolean) = viewModelScope.launch { settingsRepository.setNotifyTransferProgress(enabled) }
+    fun updateNotifyTransferComplete(enabled: Boolean) = viewModelScope.launch { settingsRepository.setNotifyTransferComplete(enabled) }
     fun updateDiscoveryIntervalSeconds(seconds: Int) = viewModelScope.launch {
         settingsRepository.setDiscoveryIntervalSeconds(seconds)
         nsdDiscoveryManager.updateDiscoveryInterval(seconds)

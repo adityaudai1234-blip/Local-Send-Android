@@ -50,6 +50,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.domain.model.AppErrorMapper
+import com.example.domain.model.ErrorCategory
+import com.example.presentation.components.CategorizedErrorCard
 import com.example.presentation.components.SectionHeader
 import com.example.presentation.components.StatusBadge
 import com.example.ui.theme.StatusError
@@ -69,6 +78,29 @@ fun NetworkDiagnosticsScreen(
     val report by viewModel.report.collectAsState()
     val pairedDevices by viewModel.pairedDevices.collectAsState()
     val recentErrors by viewModel.recentErrors.collectAsState()
+    val appErrors by viewModel.appErrors.collectAsState()
+    val lastCrashSummary by viewModel.lastCrashSummary.collectAsState()
+    var selectedErrorCategory by remember { mutableStateOf<ErrorCategory?>(null) }
+
+    val combinedErrors = remember(appErrors, recentErrors) {
+        if (appErrors.isNotEmpty()) {
+            appErrors
+        } else {
+            recentErrors.map { ev ->
+                AppErrorMapper.fromMessage(
+                    category = ErrorCategory.CONNECTION,
+                    userMessage = ev.message,
+                    technicalDetails = ev.message,
+                    targetLabel = ev.targetLabel,
+                    address = ev.address
+                ).copy(id = ev.id, timestamp = ev.timestamp)
+            }
+        }
+    }
+    val filteredErrors = remember(combinedErrors, selectedErrorCategory) {
+        if (selectedErrorCategory == null) combinedErrors
+        else combinedErrors.filter { it.category == selectedErrorCategory }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshStatus()
@@ -273,67 +305,109 @@ fun NetworkDiagnosticsScreen(
                 }
             }
 
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SectionHeader(title = "Recent Connection Errors (${recentErrors.size})")
-                    if (recentErrors.isNotEmpty()) {
-                        TextButton(onClick = { viewModel.clearErrors() }) {
-                            Text("Clear")
+            if (!lastCrashSummary.isNullOrBlank()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SectionHeader(title = "Local Crash Diagnostic (On-Device Only)")
+                        TextButton(
+                            onClick = { viewModel.clearLastCrashSummary() },
+                            modifier = Modifier.testTag("clear_crash_log_button")
+                        ) {
+                            Text("Clear Log")
+                        }
+                    }
+                }
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("last_crash_summary_card"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = StatusWarning.copy(alpha = 0.1f)),
+                        border = BorderStroke(1.dp, StatusWarning.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.BugReport, contentDescription = null, tint = StatusWarning, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Previous Unhandled Exception Snapshot", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                text = lastCrashSummary.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
             }
 
-            if (recentErrors.isEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SectionHeader(title = "Categorized Error Log (${filteredErrors.size})")
+                        if (combinedErrors.isNotEmpty()) {
+                            TextButton(
+                                onClick = { viewModel.clearErrors() },
+                                modifier = Modifier.testTag("clear_diagnostics_errors_button")
+                            ) {
+                                Text("Clear")
+                            }
+                        }
+                    }
+
+                    if (combinedErrors.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            item {
+                                FilterChip(
+                                    selected = selectedErrorCategory == null,
+                                    onClick = { selectedErrorCategory = null },
+                                    label = { Text("All (${combinedErrors.size})") }
+                                )
+                            }
+                            items(ErrorCategory.entries) { cat ->
+                                val count = combinedErrors.count { it.category == cat }
+                                if (count > 0) {
+                                    FilterChip(
+                                        selected = selectedErrorCategory == cat,
+                                        onClick = {
+                                            selectedErrorCategory = if (selectedErrorCategory == cat) null else cat
+                                        },
+                                        label = { Text("${cat.label} ($count)") }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (filteredErrors.isEmpty()) {
                 item {
                     Text(
-                        text = "No connection or transfer errors logged in this session.",
+                        text = "No connection, transfer, or protocol errors logged in this session.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }
             } else {
-                items(recentErrors, key = { it.id }) { err ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = StatusError.copy(alpha = 0.08f)
-                        ),
-                        border = BorderStroke(1.dp, StatusError.copy(alpha = 0.25f))
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = StatusError, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${err.targetLabel} (${err.address})",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = err.message,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = DateFormat.format("HH:mm:ss", Date(err.timestamp)).toString(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    }
+                items(filteredErrors, key = { it.id }) { err ->
+                    CategorizedErrorCard(
+                        error = err,
+                        timestampText = DateFormat.format("HH:mm:ss", Date(err.timestamp)).toString()
+                    )
                 }
             }
 

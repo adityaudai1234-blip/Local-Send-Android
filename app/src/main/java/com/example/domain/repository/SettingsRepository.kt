@@ -3,14 +3,20 @@ package com.example.domain.repository
 import com.example.domain.model.AccentColorOption
 import com.example.domain.model.AppSettings
 import com.example.domain.model.ThemeMode
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 interface SettingsRepository {
     val settings: StateFlow<AppSettings>
+    val isLoaded: StateFlow<Boolean>
+        get() = MutableStateFlow(true)
 
     suspend fun setDeviceName(name: String)
     suspend fun setThemeMode(mode: ThemeMode)
     suspend fun setAccentColor(option: AccentColorOption)
+    suspend fun setAppLanguage(language: String) {}
+    suspend fun setHasCompletedOnboarding(completed: Boolean) {}
+    suspend fun setLastSeenReleaseVersion(version: String) {}
     suspend fun setAutoStartReceiving(enabled: Boolean)
     suspend fun setAutoAcceptTrusted(enabled: Boolean)
     suspend fun setAskBeforeReceiving(enabled: Boolean)
@@ -18,6 +24,9 @@ interface SettingsRepository {
     suspend fun setPort(port: Int)
     suspend fun setBroadcastEnabled(enabled: Boolean)
     suspend fun setShowNotifications(enabled: Boolean)
+    suspend fun setNotifyIncomingRequests(enabled: Boolean) {}
+    suspend fun setNotifyTransferProgress(enabled: Boolean) {}
+    suspend fun setNotifyTransferComplete(enabled: Boolean) {}
     suspend fun setDiscoveryIntervalSeconds(seconds: Int)
     suspend fun setConnectionTimeoutMs(timeoutMs: Int)
     suspend fun setMaxConcurrent(count: Int)

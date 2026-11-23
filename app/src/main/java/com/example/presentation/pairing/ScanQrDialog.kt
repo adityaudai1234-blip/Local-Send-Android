@@ -71,6 +71,8 @@ import com.example.data.pairing.PairingPayload
 import com.example.domain.model.PairedDevice
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StatusSuccess
+import com.example.util.PermissionHelper
+import com.example.util.PermissionState
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
@@ -91,11 +93,11 @@ fun ScanQrDialog(
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptic = LocalHapticFeedback.current
 
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        )
+    var permissionRefreshNonce by remember { mutableIntStateOf(0) }
+    val cameraPermissionState = remember(permissionRefreshNonce) {
+        PermissionHelper.getPermissionState(context, Manifest.permission.CAMERA)
     }
+    val hasCameraPermission = cameraPermissionState == PermissionState.GRANTED
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var manualInputText by remember { mutableStateOf("") }
@@ -105,15 +107,10 @@ fun ScanQrDialog(
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        hasCameraPermission = isGranted
+        PermissionHelper.markPermissionAsked(context, Manifest.permission.CAMERA)
+        permissionRefreshNonce++
         if (!isGranted) {
             selectedTab = 1
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -277,24 +274,47 @@ fun ScanQrDialog(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
+                                .padding(18.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CameraAlt,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(48.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "Camera permission needed to scan QR codes.",
+                                text = if (cameraPermissionState == PermissionState.PERMANENTLY_DENIED) {
+                                    "Camera permission was disabled in system settings. Enable Camera in Android Settings to scan QR codes, or use the Manual / Quick tab."
+                                } else {
+                                    "LocalDrop only uses your camera while scanning a peer device's pairing QR code. No images or video are saved or uploaded."
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(14.dp))
-                            Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                                Text("Grant Permission")
+                            if (cameraPermissionState == PermissionState.PERMANENTLY_DENIED) {
+                                Button(
+                                    onClick = { PermissionHelper.openAppSettings(context) },
+                                    modifier = Modifier.testTag("camera_open_settings_button")
+                                ) {
+                                    Text("Open Android Settings")
+                                }
+                            } else {
+                                Button(
+                                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                                    modifier = Modifier.testTag("camera_enable_permission_button")
+                                ) {
+                                    Text("Enable Camera Scanner")
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { selectedTab = 1 },
+                                modifier = Modifier.testTag("camera_switch_manual_button")
+                            ) {
+                                Text("Use Manual / Quick Pairing Instead")
                             }
                         }
                     }

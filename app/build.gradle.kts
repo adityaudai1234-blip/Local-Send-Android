@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.localdrop.wzkp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 7
+    versionName = "2.2.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -99,6 +99,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.core.splashscreen)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.glance.appwidget)
   implementation(libs.androidx.glance.material3)

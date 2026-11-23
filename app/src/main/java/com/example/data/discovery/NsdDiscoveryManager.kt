@@ -6,8 +6,10 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
+import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.Device
 import com.example.domain.model.DeviceType
+import com.example.domain.model.ErrorCategory
 import com.example.util.NetworkUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -120,7 +122,9 @@ class NsdDiscoveryManager(
     fun startDiscovery() {
         if (_isScanning.value) return
         if (nsdManager == null) {
-            _error.value = "NSD service is not available on this device"
+            val msg = "NSD service is not available on this device"
+            _error.value = msg
+            AppErrorReporter.report(ErrorCategory.DISCOVERY, msg, targetLabel = "mDNS Discovery")
             return
         }
 
@@ -159,7 +163,14 @@ class NsdDiscoveryManager(
                 override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                     Log.e(TAG, "Start discovery failed: $errorCode")
                     _isScanning.value = false
-                    _error.value = "Discovery start failed (code $errorCode)"
+                    val friendly = "Unable to scan for nearby devices on this Wi-Fi network (NSD code $errorCode)."
+                    _error.value = friendly
+                    AppErrorReporter.report(
+                        category = ErrorCategory.DISCOVERY,
+                        userMessage = friendly,
+                        technicalDetails = "NsdManager.onStartDiscoveryFailed(serviceType=$serviceType, errorCode=$errorCode)",
+                        targetLabel = "mDNS Discovery"
+                    )
                     stopDiscovery()
                 }
 
@@ -176,7 +187,8 @@ class NsdDiscoveryManager(
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error starting discovery", e)
-            _error.value = "Failed to start discovery: ${e.localizedMessage}"
+            AppErrorReporter.reportThrowable(ErrorCategory.DISCOVERY, e, targetLabel = "mDNS Discovery")
+            _error.value = "Unable to start device discovery. Check Wi-Fi connection and permissions."
             _isScanning.value = false
             releaseMulticastLock()
         }
@@ -303,7 +315,7 @@ class NsdDiscoveryManager(
                 setPort(port)
                 setAttribute(DiscoveryProtocol.KEY_ALIAS, alias)
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_TYPE, "android")
-                setAttribute(DiscoveryProtocol.KEY_VERSION, "2.1.0")
+                setAttribute(DiscoveryProtocol.KEY_VERSION, "2.2.0")
                 setAttribute(DiscoveryProtocol.KEY_DEVICE_MODEL, "${Build.MANUFACTURER} ${Build.MODEL}")
                 setAttribute(DiscoveryProtocol.KEY_PROTOCOL, DiscoveryProtocol.PROTOCOL_VERSION_V2)
                 setAttribute(DiscoveryProtocol.KEY_FINGERPRINT, localFingerprint)
@@ -318,7 +330,14 @@ class NsdDiscoveryManager(
 
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                     _isAdvertising.value = false
-                    _error.value = "Failed to broadcast device: code $errorCode"
+                    val msg = "Unable to advertise this device on the local network (code $errorCode)."
+                    _error.value = msg
+                    AppErrorReporter.report(
+                        category = ErrorCategory.DISCOVERY,
+                        userMessage = msg,
+                        technicalDetails = "NsdManager.onRegistrationFailed(errorCode=$errorCode)",
+                        targetLabel = "mDNS Broadcast"
+                    )
                     releaseMulticastLockIfIdle()
                 }
 
@@ -337,7 +356,8 @@ class NsdDiscoveryManager(
             nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
         } catch (e: Exception) {
             Log.e(TAG, "Error registering service", e)
-            _error.value = "Broadcast error: ${e.localizedMessage}"
+            AppErrorReporter.reportThrowable(ErrorCategory.DISCOVERY, e, targetLabel = "mDNS Broadcast")
+            _error.value = "Unable to start device broadcast on local Wi-Fi."
             _isAdvertising.value = false
             releaseMulticastLockIfIdle()
         }

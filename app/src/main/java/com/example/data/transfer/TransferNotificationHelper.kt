@@ -91,7 +91,7 @@ class TransferNotificationHelper(private val context: Context) {
             )
 
             val builder = NotificationCompat.Builder(context, CHANNEL_REQUESTS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_localdrop)
                 .setContentTitle("Incoming transfer from ${request.senderName}")
                 .setContentText("${request.files.size} file(s) • ${request.formattedTotalBytes}")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -129,7 +129,7 @@ class TransferNotificationHelper(private val context: Context) {
             )
 
             val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_localdrop)
                 .setContentTitle(fileName)
                 .setContentText("$progressPercent% • $speedStr")
                 .setProgress(100, progressPercent, false)
@@ -143,7 +143,7 @@ class TransferNotificationHelper(private val context: Context) {
 
             if (activeCount > 1) {
                 val summary = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
-                    .setSmallIcon(R.drawable.ic_launcher_foreground)
+                    .setSmallIcon(R.drawable.ic_notification_localdrop)
                     .setContentTitle("LocalDrop Transfers")
                     .setContentText("$activeCount active file transfers")
                     .setGroup(GROUP_TRANSFERS)
@@ -160,7 +160,7 @@ class TransferNotificationHelper(private val context: Context) {
         try {
             val verb = if (isSend) "sent" else "received"
             val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_localdrop)
                 .setContentTitle("Transfer Complete")
                 .setContentText("$fileName ($totalSize) $verb successfully")
                 .setGroup(GROUP_TRANSFERS)
@@ -181,7 +181,7 @@ class TransferNotificationHelper(private val context: Context) {
     ) {
         try {
             val builder = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_localdrop)
                 .setContentTitle("Transfer Failed")
                 .setContentText("$fileName: $reason")
                 .setGroup(GROUP_TRANSFERS)

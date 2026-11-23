@@ -8,7 +8,11 @@ import android.net.NetworkRequest
 import android.util.Log
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.protocol.ProtocolMessageType
+import com.example.domain.model.AppErrorMapper
+import com.example.domain.model.AppErrorReporter
+import com.example.domain.model.AppErrorSanitizer
 import com.example.domain.model.Device
+import com.example.domain.model.ErrorCategory
 import com.example.domain.model.PairedDevice
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.util.NetworkUtils
@@ -85,15 +89,34 @@ class ConnectionManager(
         onConnectionStateChanged?.invoke()
     }
 
-    fun recordError(targetLabel: String, address: String, message: String) {
+    fun recordError(
+        targetLabel: String,
+        address: String,
+        message: String,
+        category: ErrorCategory = ErrorCategory.CONNECTION
+    ) {
+        val redacted = AppErrorSanitizer.redact(message)
         val event = ConnectionErrorEvent(
             targetLabel = targetLabel,
             address = address,
-            message = message
+            message = redacted
         )
         _recentErrors.update { list ->
             (listOf(event) + list).take(MAX_ERROR_LOG_ENTRIES)
         }
+        AppErrorReporter.report(
+            category = category,
+            userMessage = AppErrorMapper.fromMessage(
+                category = category,
+                userMessage = redacted,
+                technicalDetails = redacted,
+                targetLabel = targetLabel,
+                address = address
+            ).userMessage,
+            technicalDetails = redacted,
+            targetLabel = targetLabel,
+            address = address
+        )
     }
 
     fun clearRecentErrors() {
@@ -128,15 +151,28 @@ class ConnectionManager(
                     true
                 } else {
                     val reason = response.payload["message"] as? String ?: "Authentication failed"
-                    recordError(device.alias, "${device.ipAddress}:${device.port}", reason)
-                    setConnectionState(device.id, ConnectionState.ConnectionFailed(reason))
+                    recordError(
+                        device.alias,
+                        "${device.ipAddress}:${device.port}",
+                        reason,
+                        category = ErrorCategory.AUTHENTICATION
+                    )
+                    setConnectionState(device.id, ConnectionState.ConnectionFailed(AppErrorSanitizer.redact(reason)))
                     false
                 }
             },
             onFailure = { error ->
-                val msg = error.localizedMessage ?: "Connection timed out"
-                recordError(device.alias, "${device.ipAddress}:${device.port}", msg)
-                setConnectionState(device.id, ConnectionState.ConnectionFailed(msg))
+                val appError = AppErrorMapper.fromThrowable(
+                    category = ErrorCategory.CONNECTION,
+                    throwable = error,
+                    targetLabel = device.alias,
+                    address = "${device.ipAddress}:${device.port}"
+                )
+                AppErrorReporter.report(appError)
+                _recentErrors.update { list ->
+                    (listOf(ConnectionErrorEvent(targetLabel = device.alias, address = "${device.ipAddress}:${device.port}", message = appError.userMessage)) + list).take(MAX_ERROR_LOG_ENTRIES)
+                }
+                setConnectionState(device.id, ConnectionState.ConnectionFailed(appError.userMessage))
                 false
             }
         )
@@ -172,7 +208,16 @@ class ConnectionManager(
         return result.fold(
             onSuccess = { Result.success(elapsed) },
             onFailure = { err ->
-                recordError(device.alias, "${device.ipAddress}:${device.port}", err.localizedMessage ?: "Unreachable")
+                val appError = AppErrorMapper.fromThrowable(
+                    category = ErrorCategory.CONNECTION,
+                    throwable = err,
+                    targetLabel = device.alias,
+                    address = "${device.ipAddress}:${device.port}"
+                )
+                AppErrorReporter.report(appError)
+                _recentErrors.update { list ->
+                    (listOf(ConnectionErrorEvent(targetLabel = device.alias, address = "${device.ipAddress}:${device.port}", message = appError.userMessage)) + list).take(MAX_ERROR_LOG_ENTRIES)
+                }
                 Result.failure(err)
             }
         )

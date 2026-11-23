@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer rounded container badge -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M54,18C73.88,18 90,34.12 90,54C90,73.88 73.88,90 54,90C34.12,90 18,73.88 18,54C18,34.12 34.12,18 54,18Z" />
+    <!-- Bidirectional peer-to-peer transfer chevrons -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,47L58,47L58,41L70,51L58,61L58,55L34,55Z" />
+    <path
+        android:fillColor="#7DD3FC"
+        android:pathData="M74,61L50,61L50,67L38,57L50,47L50,53L74,53Z" />
+</vector>

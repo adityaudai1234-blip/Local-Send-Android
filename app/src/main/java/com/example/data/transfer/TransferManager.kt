@@ -11,7 +11,10 @@ import com.example.data.protocol.MessageFraming
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.protocol.ProtocolMessageType
 import com.example.data.security.SecurityValidator
+import com.example.domain.model.AppErrorMapper
+import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.Device
+import com.example.domain.model.ErrorCategory
 import com.example.domain.model.TransferDirection
 import com.example.domain.model.TransferItem
 import com.example.domain.model.TransferStats
@@ -455,7 +458,7 @@ class TransferManager(
                             peakSpeedBytesPerSec = peakSpeedBytes
                         )
 
-                        if (settings.showNotifications) {
+                        if (settings.showNotifications && settings.notifyTransferComplete) {
                             notificationHelper.showTransferComplete(
                                 notificationId = transferId.hashCode(),
                                 fileName = meta.fileName,
@@ -468,7 +471,14 @@ class TransferManager(
                         if (transferCancellationFlags[transferId] == true) {
                             markTransferCancelled(transferId, target, "Cancelled by user")
                         } else {
-                            val reason = e.localizedMessage ?: "Stream error"
+                            val appError = AppErrorMapper.fromThrowable(
+                                category = ErrorCategory.TRANSFER,
+                                throwable = e,
+                                targetLabel = target.alias,
+                                address = "${target.ipAddress}:${target.port}"
+                            )
+                            AppErrorReporter.report(appError)
+                            val reason = appError.userMessage
                             recordTransferFailed(
                                 id = transferId,
                                 sessionId = sessionId,
@@ -480,7 +490,7 @@ class TransferManager(
                                 error = reason,
                                 startTime = fileStartTime
                             )
-                            if (settings.showNotifications) {
+                            if (settings.showNotifications && settings.notifyTransferComplete) {
                                 notificationHelper.showTransferFailed(
                                     notificationId = transferId.hashCode(),
                                     transferId = transferId,
@@ -568,7 +578,8 @@ class TransferManager(
                         )
                     }
 
-                    if (settingsRepository.settings.value.showNotifications) {
+                    val liveSettings = settingsRepository.settings.value
+                    if (liveSettings.showNotifications && liveSettings.notifyTransferProgress) {
                         val activeCount = _activeTransfers.value.count {
                             it.status == TransferStatus.ACTIVE || it.status == TransferStatus.PENDING
                         }
@@ -671,7 +682,7 @@ class TransferManager(
         val approvalDeferred = CompletableDeferred<ProtocolMessage>()
         pendingApprovalResponses[sessionId] = approvalDeferred
         enqueueIncomingRequest(request)
-        if (settings.showNotifications) {
+        if (settings.showNotifications && settings.notifyIncomingRequests) {
             notificationHelper.showIncomingTransferRequest(request)
         }
 
@@ -860,7 +871,7 @@ class TransferManager(
                                 it.copy(progress = progress, speed = speedStr)
                             }
 
-                            if (settings.showNotifications) {
+                            if (settings.showNotifications && settings.notifyTransferProgress) {
                                 val activeCount = _activeTransfers.value.count {
                                     it.status == TransferStatus.ACTIVE || it.status == TransferStatus.PENDING
                                 }
@@ -931,7 +942,7 @@ class TransferManager(
                                     peakSpeedBytesPerSec = peakSpeedBytesPerSec
                                 )
 
-                                if (settings.showNotifications) {
+                                if (settings.showNotifications && settings.notifyTransferComplete) {
                                     notificationHelper.showTransferComplete(
                                         notificationId = fileMetadata.fileId.hashCode(),
                                         fileName = destFile.name,
@@ -965,7 +976,19 @@ class TransferManager(
                     direction = TransferDirection.RECEIVE
                 )
             } else {
-                val reason = e.localizedMessage ?: "Receive failed"
+                val category = when {
+                    e is SecurityException || e.message?.contains("save", ignoreCase = true) == true || e.message?.contains("space", ignoreCase = true) == true -> ErrorCategory.STORAGE
+                    e.message?.contains("checksum", ignoreCase = true) == true -> ErrorCategory.PROTOCOL
+                    else -> ErrorCategory.TRANSFER
+                }
+                val appError = AppErrorMapper.fromThrowable(
+                    category = category,
+                    throwable = e,
+                    targetLabel = peerDevice.alias,
+                    address = peerDevice.ipAddress
+                )
+                AppErrorReporter.report(appError)
+                val reason = appError.userMessage
                 recordTransferFailed(
                     id = fileMetadata.fileId,
                     sessionId = sessionId,
@@ -977,7 +1000,7 @@ class TransferManager(
                     error = reason,
                     startTime = receiveStartTime
                 )
-                if (settings.showNotifications) {
+                if (settings.showNotifications && settings.notifyTransferComplete) {
                     notificationHelper.showTransferFailed(
                         notificationId = fileMetadata.fileId.hashCode(),
                         transferId = fileMetadata.fileId,
@@ -1225,7 +1248,12 @@ class TransferManager(
                 )
             }
         }
-        connectionManager.recordError(peer.alias, "${peer.ipAddress}:${peer.port}", reason)
+        connectionManager.recordError(
+            targetLabel = peer.alias,
+            address = "${peer.ipAddress}:${peer.port}",
+            message = reason,
+            category = ErrorCategory.TRANSFER
+        )
         recalculateStats()
     }
 
@@ -1429,7 +1457,17 @@ class TransferManager(
             timestamp = completionTime
         )
         transferDao.insert(entity)
-        connectionManager.recordError(peer.alias, "${peer.ipAddress}:${peer.port}", error)
+        val errCategory = when {
+            error.contains("checksum", ignoreCase = true) -> ErrorCategory.PROTOCOL
+            error.contains("space", ignoreCase = true) || error.contains("storage", ignoreCase = true) -> ErrorCategory.STORAGE
+            else -> ErrorCategory.TRANSFER
+        }
+        connectionManager.recordError(
+            targetLabel = peer.alias,
+            address = "${peer.ipAddress}:${peer.port}",
+            message = error,
+            category = errCategory
+        )
         recalculateStats()
     }
 

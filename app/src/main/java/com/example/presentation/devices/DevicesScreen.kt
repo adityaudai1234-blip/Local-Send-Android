@@ -49,10 +49,21 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalContext
 import com.example.data.network.ConnectionState
 import com.example.data.pairing.PairingPayload
+import com.example.domain.model.AppErrorMapper
 import com.example.domain.model.Device
+import com.example.domain.model.ErrorCategory
 import com.example.domain.model.PairedDevice
+import com.example.presentation.components.CategorizedErrorCard
+import com.example.presentation.components.ContextualPermissionCard
 import com.example.presentation.components.DeviceCard
 import com.example.presentation.components.EmptyStateView
 import com.example.presentation.components.PulseScanningIndicator
@@ -61,6 +72,8 @@ import com.example.presentation.pairing.PairingConfirmationDialog
 import com.example.presentation.pairing.PairingProgressDialog
 import com.example.presentation.pairing.ScanQrDialog
 import com.example.ui.theme.CyanAccent
+import com.example.util.PermissionHelper
+import com.example.util.PermissionState
 import java.util.UUID
 
 @Composable
@@ -98,6 +111,32 @@ fun DevicesScreen(
         }
     }
 
+    val context = LocalContext.current
+    var wifiPermNonce by remember { mutableIntStateOf(0) }
+    val showNearbyWifiPrompt = PermissionHelper.isNearbyWifiRequiredOnThisDevice()
+    val nearbyWifiState = remember(wifiPermNonce) {
+        if (showNearbyWifiPrompt) {
+            PermissionHelper.getPermissionState(context, Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            PermissionState.NOT_REQUIRED
+        }
+    }
+    var nearbyBannerDismissed by remember(wifiPermNonce) {
+        mutableStateOf(
+            showNearbyWifiPrompt &&
+                PermissionHelper.isBannerDismissed(context, Manifest.permission.NEARBY_WIFI_DEVICES)
+        )
+    }
+    val nearbyWifiLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            PermissionHelper.markPermissionAsked(context, Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+        wifiPermNonce++
+        viewModel.refreshDiscovery()
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -105,6 +144,33 @@ fun DevicesScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        if (showNearbyWifiPrompt &&
+            !nearbyBannerDismissed &&
+            nearbyWifiState != PermissionState.GRANTED &&
+            nearbyWifiState != PermissionState.NOT_REQUIRED
+        ) {
+            item {
+                ContextualPermissionCard(
+                    title = "Nearby Wi-Fi Discovery",
+                    rationale = "Grant Nearby Wi-Fi Devices on Android 13+ so LocalDrop can discover peers over mDNS. You can still pair manually by QR anytime.",
+                    permissionState = nearbyWifiState,
+                    icon = Icons.Default.Wifi,
+                    onRequestPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            nearbyWifiLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                        }
+                    },
+                    onOpenSettings = { PermissionHelper.openAppSettings(context) },
+                    onDismiss = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            PermissionHelper.markBannerDismissed(context, Manifest.permission.NEARBY_WIFI_DEVICES)
+                        }
+                        nearbyBannerDismissed = true
+                    },
+                    modifier = Modifier.testTag("devices_nearby_wifi_permission_card")
+                )
+            }
+        }
         // 1. Top Card: Quick Pairing Actions (Show QR / Scan QR)
         item {
             Card(
@@ -201,34 +267,14 @@ fun DevicesScreen(
 
         if (!error.isNullOrBlank()) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = error ?: "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
+                CategorizedErrorCard(
+                    error = AppErrorMapper.fromMessage(
+                        category = ErrorCategory.DISCOVERY,
+                        userMessage = error ?: "",
+                        technicalDetails = error,
+                        targetLabel = "mDNS Discovery"
+                    )
+                )
             }
         }
 

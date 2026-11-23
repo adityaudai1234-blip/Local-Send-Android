@@ -68,15 +68,24 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.Manifest
+import android.os.Build
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.runtime.mutableIntStateOf
+import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.Device
+import com.example.presentation.components.CategorizedErrorCard
+import com.example.presentation.components.ContextualPermissionCard
 import com.example.presentation.components.DeviceCard
+import com.example.presentation.components.LocalDropBrandMark
 import com.example.presentation.components.PlatformBadge
 import com.example.presentation.components.PulseScanningIndicator
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
-import com.example.ui.theme.TealDark
 import com.example.ui.theme.TealPrimary
+import com.example.util.PermissionHelper
+import com.example.util.PermissionState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -138,6 +147,31 @@ fun HomeScreen(
         pairedDevices.filter { it.isFavorite }.map { it.id }.toSet()
     }
 
+    var permissionNonce by remember { mutableIntStateOf(0) }
+    val showNotificationsPermission = PermissionHelper.isNotificationsPermissionRequiredOnThisDevice()
+    val notificationPermissionState = remember(permissionNonce) {
+        if (showNotificationsPermission) {
+            PermissionHelper.getPermissionState(context, Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            PermissionState.NOT_REQUIRED
+        }
+    }
+    var notificationBannerDismissed by remember(permissionNonce) {
+        mutableStateOf(
+            showNotificationsPermission &&
+                PermissionHelper.isBannerDismissed(context, Manifest.permission.POST_NOTIFICATIONS)
+        )
+    }
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            PermissionHelper.markPermissionAsked(context, Manifest.permission.POST_NOTIFICATIONS)
+        }
+        permissionNonce++
+    }
+    val recentAppErrors by AppErrorReporter.errors.collectAsState()
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -155,6 +189,43 @@ fun HomeScreen(
                 onRefresh = { viewModel.refreshDiscovery() },
                 onPairClick = { viewModel.openGenerateQr() }
             )
+        }
+
+        if (showNotificationsPermission &&
+            !notificationBannerDismissed &&
+            notificationPermissionState != PermissionState.GRANTED &&
+            notificationPermissionState != PermissionState.NOT_REQUIRED
+        ) {
+            item {
+                ContextualPermissionCard(
+                    title = "Enable Transfer Alerts",
+                    rationale = "Allow notifications so LocalDrop can alert you about incoming file requests and completed transfers.",
+                    permissionState = notificationPermissionState,
+                    icon = Icons.Default.Notifications,
+                    onRequestPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
+                    onOpenSettings = { PermissionHelper.openAppSettings(context) },
+                    onDismiss = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            PermissionHelper.markBannerDismissed(context, Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        notificationBannerDismissed = true
+                    },
+                    modifier = Modifier.testTag("home_notifications_permission_card")
+                )
+            }
+        }
+
+        if (recentAppErrors.isNotEmpty()) {
+            item {
+                CategorizedErrorCard(
+                    error = recentAppErrors.first(),
+                    modifier = Modifier.clickable { onNavigateToDiagnostics() }
+                )
+            }
         }
 
         // 2. Quick Actions: SEND FILES & RECEIVE FILES Cards + Folder Send shortcut
@@ -599,20 +670,7 @@ private fun HomeHeaderSection(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Brush.linearGradient(listOf(TealDark, CyanAccent))),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SwapHoriz,
-                            contentDescription = "Logo",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    LocalDropBrandMark(size = 42.dp, cornerRadius = 12.dp, contentDescription = "LocalDrop Logo")
 
                     Spacer(modifier = Modifier.width(12.dp))
 

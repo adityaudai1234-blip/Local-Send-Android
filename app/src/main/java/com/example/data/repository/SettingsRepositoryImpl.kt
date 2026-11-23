@@ -23,10 +23,14 @@ class SettingsRepositoryImpl(
     )
     override val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    private val _isLoaded = MutableStateFlow(false)
+    override val isLoaded: StateFlow<Boolean> = _isLoaded.asStateFlow()
+
     init {
         scope.launch {
             dataStore.settingsFlow.collect { newSettings ->
                 _settings.value = newSettings
+                _isLoaded.value = true
             }
         }
     }
@@ -34,6 +38,9 @@ class SettingsRepositoryImpl(
     override suspend fun setDeviceName(name: String) = dataStore.updateDeviceName(name)
     override suspend fun setThemeMode(mode: ThemeMode) = dataStore.updateThemeMode(mode)
     override suspend fun setAccentColor(option: AccentColorOption) = dataStore.updateAccentColor(option)
+    override suspend fun setAppLanguage(language: String) = dataStore.updateAppLanguage(language)
+    override suspend fun setHasCompletedOnboarding(completed: Boolean) = dataStore.updateHasCompletedOnboarding(completed)
+    override suspend fun setLastSeenReleaseVersion(version: String) = dataStore.updateLastSeenReleaseVersion(version)
     override suspend fun setAutoStartReceiving(enabled: Boolean) = dataStore.updateAutoStartReceiving(enabled)
     override suspend fun setAutoAcceptTrusted(enabled: Boolean) = dataStore.updateAutoAcceptTrusted(enabled)
     override suspend fun setAskBeforeReceiving(enabled: Boolean) = dataStore.updateAskBeforeReceiving(enabled)
@@ -41,6 +48,9 @@ class SettingsRepositoryImpl(
     override suspend fun setPort(port: Int) = dataStore.updatePort(port)
     override suspend fun setBroadcastEnabled(enabled: Boolean) = dataStore.updateBroadcastEnabled(enabled)
     override suspend fun setShowNotifications(enabled: Boolean) = dataStore.updateShowNotifications(enabled)
+    override suspend fun setNotifyIncomingRequests(enabled: Boolean) = dataStore.updateNotifyIncomingRequests(enabled)
+    override suspend fun setNotifyTransferProgress(enabled: Boolean) = dataStore.updateNotifyTransferProgress(enabled)
+    override suspend fun setNotifyTransferComplete(enabled: Boolean) = dataStore.updateNotifyTransferComplete(enabled)
     override suspend fun setDiscoveryIntervalSeconds(seconds: Int) = dataStore.updateDiscoveryIntervalSeconds(seconds)
     override suspend fun setConnectionTimeoutMs(timeoutMs: Int) = dataStore.updateConnectionTimeoutMs(timeoutMs)
     override suspend fun setMaxConcurrent(count: Int) = dataStore.updateMaxConcurrent(count)
