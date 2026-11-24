@@ -279,7 +279,9 @@ class PairingManager(
         val requestSessionId = message.payload["sessionId"] as? String
         val requestToken = message.payload["token"] as? String
 
-        if (requestSessionId != currentSession.sessionId || requestToken != currentSession.token) {
+        if (!com.example.data.security.SecurityValidator.constantTimeEquals(requestSessionId, currentSession.sessionId) ||
+            !com.example.data.security.SecurityValidator.constantTimeEquals(requestToken, currentSession.token)
+        ) {
             return ProtocolMessage(
                 type = ProtocolMessageType.PAIRING_REJECTED,
                 senderId = myDeviceId,
@@ -349,7 +351,8 @@ class PairingManager(
 
         val providedToken = message.payload["token"] as? String
         val storedToken = pairedDeviceRepository.getAuthToken(deviceId)
-        val isMatch = !storedToken.isNullOrBlank() && storedToken == providedToken
+        val isMatch = !storedToken.isNullOrBlank() &&
+            com.example.data.security.SecurityValidator.constantTimeEquals(storedToken, providedToken)
         com.example.data.security.SecurityValidator.recordAuthResult(deviceId, isMatch)
 
         return if (isMatch) {

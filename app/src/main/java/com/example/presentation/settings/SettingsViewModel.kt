@@ -100,6 +100,7 @@ class SettingsViewModel(
     fun updateConnectionTimeoutMs(timeoutMs: Int) = viewModelScope.launch { settingsRepository.setConnectionTimeoutMs(timeoutMs) }
     fun updateMaxConcurrent(count: Int) = viewModelScope.launch { settingsRepository.setMaxConcurrent(count) }
     fun updateDuplicateHandling(handling: String) = viewModelScope.launch { settingsRepository.setDuplicateHandling(handling) }
+    fun updateAskOnConflictInUi(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAskOnConflictInUi(enabled) }
     fun updatePreserveOriginalNames(enabled: Boolean) = viewModelScope.launch { settingsRepository.setPreserveOriginalNames(enabled) }
     fun updateAutoOpenCompleted(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAutoOpenCompleted(enabled) }
     fun updateMaxAcceptedFileSizeMb(sizeMb: Long) = viewModelScope.launch { settingsRepository.setMaxAcceptedFileSizeMb(sizeMb) }

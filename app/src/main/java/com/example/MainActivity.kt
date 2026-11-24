@@ -42,11 +42,26 @@ object ShareIntentExtractor {
         }
         return uris.toList()
     }
+
+    fun extractSharedText(intent: Intent?): Pair<String, String?>? {
+        if (intent == null) return null
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return null
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+            ?: run {
+                val clip = intent.clipData
+                if (clip != null && clip.itemCount > 0) {
+                    clip.getItemAt(0).text?.toString()?.takeIf { it.isNotBlank() }
+                } else null
+            } ?: return null
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+        return text to subject
+    }
 }
 
 class MainActivity : ComponentActivity() {
 
     private val sharedUrisState = mutableStateOf<List<Uri>>(emptyList())
+    private val sharedTextState = mutableStateOf<Pair<String, String?>?>(null)
     private val widgetActionState = mutableStateOf<String?>(null)
     private val widgetTargetIdState = mutableStateOf<String?>(null)
 
@@ -95,6 +110,8 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     sharedUris = sharedUrisState.value,
                     onSharedUrisConsumed = { sharedUrisState.value = emptyList() },
+                    sharedText = sharedTextState.value,
+                    onSharedTextConsumed = { sharedTextState.value = null },
                     widgetAction = widgetActionState.value,
                     widgetTargetDeviceId = widgetTargetIdState.value,
                     onWidgetActionConsumed = {
@@ -124,10 +141,15 @@ class MainActivity : ComponentActivity() {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                     )
                 } catch (_: Exception) {
-                    // Temporary Share Sheet read grants are still valid for the current Activity session
+                    // Temporary Share Sheet read grants are valid for the active session
                 }
             }
             sharedUrisState.value = extracted
+        } else {
+            val textNote = ShareIntentExtractor.extractSharedText(intent)
+            if (textNote != null) {
+                sharedTextState.value = textNote
+            }
         }
 
         val widgetAction = intent.getStringExtra(WidgetUpdateHelper.EXTRA_WIDGET_ACTION)

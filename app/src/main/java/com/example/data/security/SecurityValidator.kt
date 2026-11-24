@@ -1,6 +1,9 @@
 package com.example.data.security
 
 import com.example.data.transfer.FileMetadata
+import java.io.File
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
@@ -40,6 +43,31 @@ object SecurityValidator {
     fun isRelativePathSafe(relativePath: String?): Boolean {
         if (relativePath.isNullOrBlank()) return false
         return FileMetadata.sanitizeRelativePath(relativePath) != null
+    }
+
+    /**
+     * Verifies [target] resolves inside [baseDir] using canonical paths and a strict
+     * directory boundary check so sibling directories like /LocalDropEvil are rejected.
+     */
+    fun isCanonicalSubPath(target: File, baseDir: File): Boolean {
+        return try {
+            val baseCanonical = baseDir.canonicalPath.trimEnd(File.separatorChar)
+            val targetCanonical = target.canonicalPath
+            targetCanonical == baseCanonical || targetCanonical.startsWith(baseCanonical + File.separator)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Constant-time string comparison to protect session IDs and authentication tokens
+     * against timing side channels.
+     */
+    fun constantTimeEquals(a: String?, b: String?): Boolean {
+        if (a == null || b == null) return false
+        val aBytes = a.toByteArray(StandardCharsets.UTF_8)
+        val bBytes = b.toByteArray(StandardCharsets.UTF_8)
+        return MessageDigest.isEqual(aBytes, bBytes)
     }
 
     fun isSuspiciousExtension(fileName: String): Boolean {

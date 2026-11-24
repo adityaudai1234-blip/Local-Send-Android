@@ -5,8 +5,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.LocalDropApp
@@ -25,6 +27,7 @@ class FileTransferService : Service() {
         const val NOTIFICATION_ID = 9001
         const val ACTION_START = "com.example.localdrop.action.START_TRANSFER"
         const val ACTION_STOP = "com.example.localdrop.action.STOP_TRANSFER"
+        private const val WAKELOCK_TIMEOUT_MS = 10L * 60L * 1000L
 
         fun start(context: Context) {
             val intent = Intent(context, FileTransferService::class.java).apply {
@@ -51,6 +54,8 @@ class FileTransferService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observationJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -61,11 +66,51 @@ class FileTransferService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
+                acquireLocks()
                 startInForeground()
                 observeTransfers()
                 return START_STICKY
             }
         }
+    }
+
+    private fun acquireLocks() {
+        try {
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocalDrop:TransferWakeLock")
+                    ?.apply { setReferenceCounted(false) }
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(WAKELOCK_TIMEOUT_MS)
+            }
+        } catch (_: Exception) {}
+
+        try {
+            if (wifiLock == null) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wm?.createWifiLock(mode, "LocalDrop:TransferWifiLock")
+                    ?.apply { setReferenceCounted(false) }
+            }
+            if (wifiLock?.isHeld == false) {
+                wifiLock?.acquire()
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun releaseLocks() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (_: Exception) {}
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (_: Exception) {}
     }
 
     private fun startInForeground() {
@@ -99,9 +144,8 @@ class FileTransferService : Service() {
 
         observationJob = scope.launch {
             transferManager.activeTransfers.collect { list ->
-                val hasActive = list.any { it.status == TransferStatus.ACTIVE || it.status == TransferStatus.PENDING }
+                val hasActive = list.any { it.status == TransferStatus.ACTIVE || (it.status == TransferStatus.PENDING && !it.isPaused) }
                 if (!hasActive) {
-                    // All active transfers completed, stop service
                     stopForegroundService()
                 }
             }
@@ -111,11 +155,13 @@ class FileTransferService : Service() {
     private fun stopForegroundService() {
         observationJob?.cancel()
         observationJob = null
+        releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
+        releaseLocks()
         super.onDestroy()
         scope.cancel()
     }

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.example.util.rememberReducedMotion
 
 @Composable
 fun PulseScanningIndicator(
@@ -27,11 +28,12 @@ fun PulseScanningIndicator(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
-    if (!isScanning) {
+    val reducedMotion = rememberReducedMotion()
+    if (!isScanning || reducedMotion) {
         Icon(
             imageVector = Icons.Default.Radar,
-            contentDescription = "Radar",
-            tint = color.copy(alpha = 0.5f),
+            contentDescription = if (isScanning) "Scanning" else "Radar",
+            tint = if (isScanning) color else color.copy(alpha = 0.5f),
             modifier = modifier.size(24.dp)
         )
         return

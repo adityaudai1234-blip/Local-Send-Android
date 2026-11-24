@@ -28,12 +28,13 @@ class LocalDropApp : Application() {
         LocalCrashReporter.install(this)
         container = DefaultAppContainer(this)
 
-        // Startup recovery & optional temp file maintenance
+        // Startup queue recovery & orphan temp file maintenance (preserves resumable partials)
         appScope.launch {
             try {
+                val recoverableIds = container.transferManager.recoverInterruptedTransfers()
                 val currentSettings = container.settingsRepository.settings.first()
                 if (currentSettings.autoCleanTempFiles) {
-                    container.storageManager.cleanAllTempFiles()
+                    container.storageManager.cleanOrphanTempFiles(recoverableIds)
                 } else {
                     container.storageManager.cleanStaleTempFiles()
                 }
@@ -41,7 +42,7 @@ class LocalDropApp : Application() {
                 AppErrorReporter.reportThrowable(
                     category = ErrorCategory.STORAGE,
                     throwable = e,
-                    targetLabel = "Startup Storage Check"
+                    targetLabel = "Startup Recovery Check"
                 )
             }
         }

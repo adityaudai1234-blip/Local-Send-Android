@@ -73,6 +73,9 @@ class HomeViewModel(
     private val _showConfirmationDialog = MutableStateFlow(false)
     val showConfirmationDialog: StateFlow<Boolean> = _showConfirmationDialog.asStateFlow()
 
+    private val _shareAccessWarning = MutableStateFlow<String?>(null)
+    val shareAccessWarning: StateFlow<String?> = _shareAccessWarning.asStateFlow()
+
     /**
      * Quick Send rail: combines Favorites, Last Used destination, and Recently Used/Discovered peers.
      */
@@ -147,6 +150,10 @@ class HomeViewModel(
         discoveryRepository.startDiscovery()
     }
 
+    fun clearShareAccessWarning() {
+        _shareAccessWarning.value = null
+    }
+
     fun openGenerateQr() {
         _showGenerateQr.value = true
     }
@@ -175,6 +182,10 @@ class HomeViewModel(
                 uris.map { SelectedFile.fromUri(context, it) }
             }
             if (newFiles.isEmpty()) return@launch
+            val brokenCount = newFiles.count { !it.isAccessible }
+            if (brokenCount > 0) {
+                _shareAccessWarning.value = "$brokenCount selected file(s) could not be read and may need re-selection."
+            }
             _selectedFiles.update { it + newFiles }
 
             if (preselectedTarget != null) {
@@ -214,7 +225,24 @@ class HomeViewModel(
                 uris.map { SelectedFile.fromUri(context, it) }
             }
             if (sharedFiles.isEmpty()) return@launch
+            val brokenCount = sharedFiles.count { !it.isAccessible }
+            if (brokenCount > 0) {
+                _shareAccessWarning.value = "$brokenCount shared file(s) could not be accessed due to expired provider permissions."
+            }
             _selectedFiles.value = sharedFiles
+            _showFileSelectionDialog.value = brokenCount > 0
+            _showConfirmationDialog.value = false
+            _showDeviceSelectionDialog.value = brokenCount == 0
+        }
+    }
+
+    fun onSharedTextReceived(text: String, subject: String?, context: Context) {
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            val noteFile = withContext(Dispatchers.IO) {
+                SelectedFile.createTextNoteFile(context, text, subject)
+            } ?: return@launch
+            _selectedFiles.value = listOf(noteFile)
             _showFileSelectionDialog.value = false
             _showConfirmationDialog.value = false
             _showDeviceSelectionDialog.value = true

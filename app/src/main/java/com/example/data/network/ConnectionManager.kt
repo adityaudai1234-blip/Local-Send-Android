@@ -2,6 +2,7 @@ package com.example.data.network
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -16,6 +17,7 @@ import com.example.domain.model.ErrorCategory
 import com.example.domain.model.PairedDevice
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.util.NetworkUtils
+import com.example.util.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,6 +30,8 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -43,7 +47,8 @@ class ConnectionManager(
     private val client: NetworkClient,
     private val myDeviceIdProvider: () -> String,
     private val context: Context? = null,
-    private val pairedDeviceRepository: PairedDeviceRepository? = null
+    private val pairedDeviceRepository: PairedDeviceRepository? = null,
+    private val performanceMonitor: PerformanceMonitor? = null
 ) {
     companion object {
         private const val TAG = "ConnectionManager"
@@ -59,6 +64,9 @@ class ConnectionManager(
     private val _connectionStates = MutableStateFlow<Map<String, ConnectionState>>(emptyMap())
     val connectionStates: StateFlow<Map<String, ConnectionState>> = _connectionStates.asStateFlow()
 
+    private val _peerLatenciesMs = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val peerLatenciesMs: StateFlow<Map<String, Long>> = _peerLatenciesMs.asStateFlow()
+
     private val _recentErrors = MutableStateFlow<List<ConnectionErrorEvent>>(emptyList())
     val recentErrors: StateFlow<List<ConnectionErrorEvent>> = _recentErrors.asStateFlow()
 
@@ -70,8 +78,13 @@ class ConnectionManager(
 
     private val activeDevices = ConcurrentHashMap<String, PairedDevice>()
     private val userDisconnectedIds = ConcurrentHashMap.newKeySet<String>()
+    private val peerMutexes = ConcurrentHashMap<String, Mutex>()
+
+    @Volatile
+    private var lastObservedIpv4: String? = NetworkUtils.getLocalIpv4Address()
 
     var onConnectionStateChanged: (() -> Unit)? = null
+    var onNetworkChanged: ((isConnected: Boolean) -> Unit)? = null
 
     init {
         startHeartbeatWorker()
@@ -124,63 +137,71 @@ class ConnectionManager(
     }
 
     suspend fun connect(device: PairedDevice, authToken: String?): Boolean {
-        userDisconnectedIds.remove(device.id)
-        setConnectionState(device.id, ConnectionState.Connecting)
-        val myId = myDeviceIdProvider()
+        val mutex = peerMutexes.getOrPut(device.id) { Mutex() }
+        return mutex.withLock {
+            userDisconnectedIds.remove(device.id)
+            setConnectionState(device.id, ConnectionState.Connecting)
+            val startMs = System.currentTimeMillis()
+            val myId = myDeviceIdProvider()
 
-        val authMessage = ProtocolMessage(
-            type = ProtocolMessageType.AUTHENTICATION_REQUEST,
-            senderId = myId,
-            receiverId = device.id,
-            payload = mapOf(
-                "token" to (authToken ?: ""),
-                "timestamp" to System.currentTimeMillis()
+            val authMessage = ProtocolMessage(
+                type = ProtocolMessageType.AUTHENTICATION_REQUEST,
+                senderId = myId,
+                receiverId = device.id,
+                payload = mapOf(
+                    "token" to (authToken ?: ""),
+                    "timestamp" to System.currentTimeMillis()
+                )
             )
-        )
 
-        setConnectionState(device.id, ConnectionState.Authenticating)
-        val result = client.sendMessage(device.ipAddress, device.port, authMessage, timeoutMs = 8_000)
+            setConnectionState(device.id, ConnectionState.Authenticating)
+            val result = client.sendMessage(device.ipAddress, device.port, authMessage, timeoutMs = 8_000)
 
-        return result.fold(
-            onSuccess = { response ->
-                if (response.type == ProtocolMessageType.AUTHENTICATION_RESPONSE ||
-                    response.type == ProtocolMessageType.CONNECTION_ESTABLISHED
-                ) {
-                    activeDevices[device.id] = device
-                    setConnectionState(device.id, ConnectionState.Connected)
-                    true
-                } else {
-                    val reason = response.payload["message"] as? String ?: "Authentication failed"
-                    recordError(
-                        device.alias,
-                        "${device.ipAddress}:${device.port}",
-                        reason,
-                        category = ErrorCategory.AUTHENTICATION
+            result.fold(
+                onSuccess = { response ->
+                    if (response.type == ProtocolMessageType.AUTHENTICATION_RESPONSE ||
+                        response.type == ProtocolMessageType.CONNECTION_ESTABLISHED
+                    ) {
+                        val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                        performanceMonitor?.recordConnectionDuration(elapsed)
+                        _peerLatenciesMs.update { it + (device.id to elapsed) }
+                        activeDevices[device.id] = device
+                        setConnectionState(device.id, ConnectionState.Connected)
+                        true
+                    } else {
+                        val reason = response.payload["message"] as? String ?: "Authentication failed"
+                        recordError(
+                            device.alias,
+                            "${device.ipAddress}:${device.port}",
+                            reason,
+                            category = ErrorCategory.AUTHENTICATION
+                        )
+                        setConnectionState(device.id, ConnectionState.ConnectionFailed(AppErrorSanitizer.redact(reason)))
+                        false
+                    }
+                },
+                onFailure = { error ->
+                    val appError = AppErrorMapper.fromThrowable(
+                        category = ErrorCategory.CONNECTION,
+                        throwable = error,
+                        targetLabel = device.alias,
+                        address = "${device.ipAddress}:${device.port}"
                     )
-                    setConnectionState(device.id, ConnectionState.ConnectionFailed(AppErrorSanitizer.redact(reason)))
+                    AppErrorReporter.report(appError)
+                    _recentErrors.update { list ->
+                        (listOf(ConnectionErrorEvent(targetLabel = device.alias, address = "${device.ipAddress}:${device.port}", message = appError.userMessage)) + list).take(MAX_ERROR_LOG_ENTRIES)
+                    }
+                    setConnectionState(device.id, ConnectionState.ConnectionFailed(appError.userMessage))
                     false
                 }
-            },
-            onFailure = { error ->
-                val appError = AppErrorMapper.fromThrowable(
-                    category = ErrorCategory.CONNECTION,
-                    throwable = error,
-                    targetLabel = device.alias,
-                    address = "${device.ipAddress}:${device.port}"
-                )
-                AppErrorReporter.report(appError)
-                _recentErrors.update { list ->
-                    (listOf(ConnectionErrorEvent(targetLabel = device.alias, address = "${device.ipAddress}:${device.port}", message = appError.userMessage)) + list).take(MAX_ERROR_LOG_ENTRIES)
-                }
-                setConnectionState(device.id, ConnectionState.ConnectionFailed(appError.userMessage))
-                false
-            }
-        )
+            )
+        }
     }
 
     fun disconnect(deviceId: String) {
         userDisconnectedIds.add(deviceId)
         val device = activeDevices.remove(deviceId)
+        _peerLatenciesMs.update { it - deviceId }
         if (device != null) {
             scope.launch {
                 val closeMsg = ProtocolMessage(
@@ -195,8 +216,13 @@ class ConnectionManager(
     }
 
     suspend fun ping(device: PairedDevice): Boolean {
+        val start = System.currentTimeMillis()
         val heartbeat = ProtocolMessage.createHeartbeat(myDeviceIdProvider())
         val result = client.sendMessage(device.ipAddress, device.port, heartbeat, timeoutMs = 4_000)
+        if (result.isSuccess) {
+            val rtt = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+            _peerLatenciesMs.update { it + (device.id to rtt) }
+        }
         return result.isSuccess
     }
 
@@ -206,7 +232,10 @@ class ConnectionManager(
         val result = client.sendMessage(device.ipAddress, device.port, heartbeat, timeoutMs = 4_000)
         val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
         return result.fold(
-            onSuccess = { Result.success(elapsed) },
+            onSuccess = {
+                _peerLatenciesMs.update { map -> map + (device.id to elapsed) }
+                Result.success(elapsed)
+            },
             onFailure = { err ->
                 val appError = AppErrorMapper.fromThrowable(
                     category = ErrorCategory.CONNECTION,
@@ -235,6 +264,8 @@ class ConnectionManager(
                     d.id == paired.id ||
                         (d.alias.equals(paired.alias, ignoreCase = true) && d.deviceType == paired.deviceType)
                 } ?: continue
+
+                if (!match.isOnline) continue
 
                 val endpointChanged = match.ipAddress.isNotBlank() &&
                     (match.ipAddress != paired.ipAddress || match.port != paired.port)
@@ -320,18 +351,37 @@ class ConnectionManager(
             val request = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                 .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                 .build()
 
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
+                    handleInterfaceOrNetworkTransition(connected = true)
                     triggerBoundedReconnect()
                 }
 
-                override fun onLost(network: Network) {
-                    activeDevices.keys.toList().forEach { id ->
-                        setConnectionState(id, ConnectionState.Disconnected)
+                override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                    val currentIpv4 = NetworkUtils.getLocalIpv4Address()
+                    if (currentIpv4 != lastObservedIpv4) {
+                        lastObservedIpv4 = currentIpv4
+                        handleInterfaceOrNetworkTransition(connected = currentIpv4 != null)
+                        triggerBoundedReconnect()
                     }
-                    activeDevices.clear()
+                }
+
+                override fun onLost(network: Network) {
+                    val stillConnected = NetworkUtils.getConnectionStatus(ctx).isConnected
+                    if (!stillConnected) {
+                        lastObservedIpv4 = null
+                        activeDevices.keys.toList().forEach { id ->
+                            setConnectionState(id, ConnectionState.Disconnected)
+                        }
+                        activeDevices.clear()
+                        _peerLatenciesMs.value = emptyMap()
+                        onNetworkChanged?.invoke(false)
+                    } else {
+                        handleInterfaceOrNetworkTransition(connected = true)
+                    }
                 }
             }
             networkCallback = callback
@@ -341,6 +391,10 @@ class ConnectionManager(
             Log.w(TAG, "Could not register NetworkCallback: ${e.message}")
             _isNetworkMonitorActive.value = false
         }
+    }
+
+    private fun handleInterfaceOrNetworkTransition(connected: Boolean) {
+        onNetworkChanged?.invoke(connected)
     }
 
     private fun startHeartbeatWorker() {
@@ -354,6 +408,7 @@ class ConnectionManager(
                         Log.w(TAG, "Heartbeat lost for ${device.alias} (${device.ipAddress})")
                         recordError(device.alias, "${device.ipAddress}:${device.port}", "Heartbeat timeout")
                         activeDevices.remove(device.id)
+                        _peerLatenciesMs.update { it - device.id }
                         setConnectionState(device.id, ConnectionState.Disconnected)
                     }
                 }
@@ -375,6 +430,7 @@ class ConnectionManager(
         networkCallback = null
         _isNetworkMonitorActive.value = false
         activeDevices.clear()
+        _peerLatenciesMs.value = emptyMap()
         _connectionStates.value = emptyMap()
     }
 }

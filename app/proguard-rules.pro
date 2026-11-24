@@ -22,13 +22,19 @@
 -keep class com.example.data.transfer.TransferNotificationReceiver { *; }
 -keep class com.example.widget.** { *; }
 -keep class com.example.data.transfer.FileMetadata { *; }
+-keep class com.example.data.transfer.ResumeMetadata { *; }
 -keep class com.example.data.transfer.IncomingTransferRequest { *; }
+-keep class com.example.data.transfer.ConflictAction { *; }
+-keep class com.example.data.transfer.ConflictPrompt { *; }
+-keep class com.example.data.transfer.ConflictDecision { *; }
 -keep class com.example.data.network.ConnectionErrorEvent { *; }
 -keep class com.example.domain.model.AppError { *; }
 -keep class com.example.domain.model.ErrorCategory { *; }
 -keep class com.example.domain.model.ReleaseNoteEntry { *; }
 -keep class com.example.util.LocalCrashReporter { *; }
 -keep class com.example.util.PermissionHelper { *; }
+-keep class com.example.util.PerformanceMonitor { *; }
+-keep class com.example.util.PerformanceSnapshot { *; }
 
 # AndroidX Core SplashScreen
 -keep class androidx.core.splashscreen.** { *; }

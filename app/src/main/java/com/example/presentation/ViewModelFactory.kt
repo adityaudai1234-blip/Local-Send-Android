@@ -68,7 +68,8 @@ class ViewModelFactory(
                     connectionManager = appContainer.connectionManager,
                     pairedDeviceRepository = appContainer.pairedDeviceRepository,
                     tcpServer = appContainer.tcpServer,
-                    settingsRepository = appContainer.settingsRepository
+                    settingsRepository = appContainer.settingsRepository,
+                    performanceMonitor = appContainer.performanceMonitor
                 ) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")

@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -34,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -88,8 +91,6 @@ fun ReceivedFilesScreen(
     modifier: Modifier = Modifier,
     onFileDeleted: (String) -> Unit = {}
 ) {
-    BackHandler(onBack = onBack)
-
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -100,6 +101,17 @@ fun ReceivedFilesScreen(
     var showSortMenu by remember { mutableStateOf(false) }
     var previewEntry by remember { mutableStateOf<ReceivedFileEntry?>(null) }
     var pendingDelete by remember { mutableStateOf<ReceivedFileEntry?>(null) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    BackHandler(enabled = true) {
+        if (selectionMode) {
+            selectionMode = false
+            selectedPaths = emptySet()
+        } else {
+            onBack()
+        }
+    }
 
     fun reloadFiles() {
         scope.launch {
@@ -129,6 +141,10 @@ fun ReceivedFilesScreen(
         }
     }
 
+    val selectedEntries = remember(allEntries, selectedPaths) {
+        allEntries.filter { it.file.absolutePath in selectedPaths }
+    }
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
@@ -139,12 +155,16 @@ fun ReceivedFilesScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Received Files",
+                            text = if (selectionMode) "${selectedEntries.size} selected" else "Received Files",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${filteredEntries.size} item(s) • ${TransferItem.formatBytes(filteredEntries.sumOf { it.size })}",
+                            text = if (selectionMode) {
+                                TransferItem.formatBytes(selectedEntries.sumOf { it.size })
+                            } else {
+                                "${filteredEntries.size} item(s) • ${TransferItem.formatBytes(filteredEntries.sumOf { it.size })}"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -152,34 +172,96 @@ fun ReceivedFilesScreen(
                 },
                 navigationIcon = {
                     IconButton(
-                        onClick = onBack,
+                        onClick = {
+                            if (selectionMode) {
+                                selectionMode = false
+                                selectedPaths = emptySet()
+                            } else {
+                                onBack()
+                            }
+                        },
                         modifier = Modifier.testTag("received_files_back_button")
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            imageVector = if (selectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = if (selectionMode) "Exit selection mode" else "Back"
+                        )
                     }
                 },
                 actions = {
-                    Box {
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort files")
-                        }
-                        DropdownMenu(
-                            expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
+                    if (selectionMode) {
+                        IconButton(
+                            onClick = {
+                                val files = selectedEntries.map { it.file }
+                                val launched = storageManager.shareMultipleFiles(files)
+                                if (!launched) {
+                                    scope.launch { snackbarHostState.showSnackbar("Select at least one file to share") }
+                                } else {
+                                    selectionMode = false
+                                    selectedPaths = emptySet()
+                                }
+                            },
+                            enabled = selectedEntries.isNotEmpty(),
+                            modifier = Modifier.testTag("received_share_selected_button")
                         ) {
-                            ReceivedFileSort.entries.forEach { opt ->
-                                DropdownMenuItem(
-                                    text = { Text("Sort by ${opt.label}") },
-                                    onClick = {
-                                        sortOption = opt
-                                        showSortMenu = false
+                            Icon(Icons.Default.Share, contentDescription = "Share selected files")
+                        }
+                        IconButton(
+                            onClick = {
+                                val targets = selectedEntries.toList()
+                                scope.launch {
+                                    var deletedCount = 0
+                                    withContext(Dispatchers.IO) {
+                                        targets.forEach { target ->
+                                            if (storageManager.deleteFile(target.file)) {
+                                                deletedCount++
+                                                onFileDeleted(target.file.absolutePath)
+                                            }
+                                        }
                                     }
-                                )
+                                    selectionMode = false
+                                    selectedPaths = emptySet()
+                                    reloadFiles()
+                                    snackbarHostState.showSnackbar("Deleted $deletedCount file(s)")
+                                }
+                            },
+                            enabled = selectedEntries.isNotEmpty(),
+                            modifier = Modifier.testTag("received_delete_selected_button")
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete selected files")
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                selectionMode = true
+                                selectedPaths = emptySet()
+                            },
+                            modifier = Modifier.testTag("received_multiselect_toggle")
+                        ) {
+                            Icon(Icons.Default.Checklist, contentDescription = "Select multiple files")
+                        }
+                        Box {
+                            IconButton(onClick = { showSortMenu = true }) {
+                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort files")
+                            }
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                ReceivedFileSort.entries.forEach { opt ->
+                                    DropdownMenuItem(
+                                        text = { Text("Sort by ${opt.label}") },
+                                        onClick = {
+                                            sortOption = opt
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
                             }
                         }
-                    }
-                    IconButton(onClick = { reloadFiles() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh received files")
+                        IconButton(onClick = { reloadFiles() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh received files")
+                        }
                     }
                 }
             )
@@ -248,9 +330,27 @@ fun ReceivedFilesScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(filteredEntries, key = { it.file.absolutePath }) { entry ->
+                        val isChecked = entry.file.absolutePath in selectedPaths
                         ReceivedBrowserRow(
                             entry = entry,
-                            onPreview = { previewEntry = entry },
+                            selectionMode = selectionMode,
+                            isSelected = isChecked,
+                            onToggleSelect = {
+                                val path = entry.file.absolutePath
+                                selectedPaths = if (path in selectedPaths) {
+                                    selectedPaths - path
+                                } else {
+                                    selectedPaths + path
+                                }
+                            },
+                            onPreview = {
+                                if (selectionMode) {
+                                    val path = entry.file.absolutePath
+                                    selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
+                                } else {
+                                    previewEntry = entry
+                                }
+                            },
                             onShare = { storageManager.shareFile(entry.file) },
                             onDelete = { pendingDelete = entry }
                         )
@@ -311,6 +411,9 @@ fun ReceivedFilesScreen(
 @Composable
 private fun ReceivedBrowserRow(
     entry: ReceivedFileEntry,
+    selectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
     onPreview: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit
@@ -323,9 +426,16 @@ private fun ReceivedBrowserRow(
             .testTag("received_browser_item_${entry.name}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            }
         ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+        border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 1.dp,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+        )
     ) {
         Row(
             modifier = Modifier
@@ -333,6 +443,13 @@ private fun ReceivedBrowserRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (selectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect() }
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
             FilePreviewThumbnail(
                 fileName = entry.name,
                 mimeType = entry.mimeType,
@@ -375,17 +492,19 @@ private fun ReceivedBrowserRow(
                     }
                 }
             }
-            IconButton(
-                onClick = onShare,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(Icons.Default.Share, contentDescription = "Share ${entry.name}", tint = MaterialTheme.colorScheme.primary)
-            }
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete ${entry.name}", tint = MaterialTheme.colorScheme.error)
+            if (!selectionMode) {
+                IconButton(
+                    onClick = onShare,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = "Share ${entry.name}", tint = MaterialTheme.colorScheme.primary)
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = "Delete ${entry.name}", tint = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }

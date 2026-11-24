@@ -8,9 +8,11 @@ import android.os.Build
 import android.util.Log
 import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.Device
+import com.example.domain.model.DeviceStatus
 import com.example.domain.model.DeviceType
 import com.example.domain.model.ErrorCategory
 import com.example.util.NetworkUtils
+import com.example.util.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,10 +30,12 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class NsdDiscoveryManager(
-    private val context: Context
+    private val context: Context,
+    private val performanceMonitor: PerformanceMonitor? = null
 ) {
     companion object {
         private const val TAG = "NsdDiscoveryManager"
+        private const val MIN_REFRESH_COOLDOWN_MS = 1_200L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -69,6 +73,21 @@ class NsdDiscoveryManager(
     @Volatile
     private var discoveryIntervalSeconds: Int = 10
 
+    @Volatile
+    private var discoveryStartedAtMs: Long = 0L
+
+    @Volatile
+    private var recordedInitialDiscoveryLatency: Boolean = false
+
+    @Volatile
+    private var lastManualRefreshAtMs: Long = 0L
+
+    @Volatile
+    private var lastAdvertisedAlias: String? = null
+
+    @Volatile
+    private var lastAdvertisedPort: Int = DiscoveryProtocol.DEFAULT_PORT
+
     init {
         startResolveWorker()
         startStaleDeviceCleanupWorker()
@@ -87,7 +106,7 @@ class NsdDiscoveryManager(
                 } finally {
                     resolvingServices.remove(serviceInfo.serviceName)
                 }
-                delay(250)
+                delay(200)
             }
         }
     }
@@ -114,7 +133,7 @@ class NsdDiscoveryManager(
             }
         }
         if (removedCount > 0) {
-            _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+            emitSortedDevices()
         }
         return removedCount
     }
@@ -130,6 +149,8 @@ class NsdDiscoveryManager(
 
         try {
             acquireMulticastLock()
+            discoveryStartedAtMs = System.currentTimeMillis()
+            recordedInitialDiscoveryLatency = false
 
             val listener = object : NsdManager.DiscoveryListener {
                 override fun onDiscoveryStarted(regType: String) {
@@ -149,10 +170,19 @@ class NsdDiscoveryManager(
                 }
 
                 override fun onServiceLost(service: NsdServiceInfo) {
-                    val removed = deviceMap.remove(service.serviceName) != null
                     resolvingServices.remove(service.serviceName)
-                    if (removed) {
-                        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+                    val matchingKey = deviceMap.entries.firstOrNull { (key, dev) ->
+                        key == service.serviceName || dev.serviceName == service.serviceName
+                    }?.key
+                    if (matchingKey != null) {
+                        val existing = deviceMap[matchingKey]
+                        if (existing != null) {
+                            deviceMap[matchingKey] = existing.copy(
+                                isOnline = false,
+                                status = DeviceStatus.OFFLINE
+                            )
+                            emitSortedDevices()
+                        }
                     }
                 }
 
@@ -205,16 +235,26 @@ class NsdDiscoveryManager(
                 }
 
                 override fun onServiceResolved(resolvedInfo: NsdServiceInfo) {
-                    val hostAddress = resolvedInfo.host?.hostAddress ?: ""
-                    val localIp = NetworkUtils.getLocalIpv4Address() ?: ""
+                    val hostAddress = (resolvedInfo.host?.hostAddress ?: "").substringBefore('%')
+                    val localIpv4 = NetworkUtils.getLocalIpv4Address() ?: ""
+                    val localIpv6 = NetworkUtils.getLocalIpv6Address() ?: ""
                     val attributes = parseAttributes(resolvedInfo)
                     val fingerprint = attributes[DiscoveryProtocol.KEY_FINGERPRINT]?.takeIf { it.isNotBlank() }
 
+                    val isSelfIp = hostAddress.isNotEmpty() &&
+                        (hostAddress == localIpv4 || hostAddress == localIpv6)
                     val isSelf = (currentRegistered != null && resolvedInfo.serviceName.contains(currentRegistered)) ||
                         (fingerprint != null && fingerprint == localFingerprint) ||
-                        (hostAddress.isNotEmpty() && hostAddress == localIp && resolvedInfo.port == DiscoveryProtocol.DEFAULT_PORT)
+                        (isSelfIp && resolvedInfo.port == lastAdvertisedPort)
 
                     if (isSelf) return
+
+                    if (!recordedInitialDiscoveryLatency && discoveryStartedAtMs > 0L) {
+                        recordedInitialDiscoveryLatency = true
+                        performanceMonitor?.recordDiscoveryDuration(
+                            (System.currentTimeMillis() - discoveryStartedAtMs).coerceAtLeast(1L)
+                        )
+                    }
 
                     val alias = attributes[DiscoveryProtocol.KEY_ALIAS]?.takeIf { it.isNotBlank() }
                         ?: resolvedInfo.serviceName.replace("\\.", ".")
@@ -236,7 +276,9 @@ class NsdDiscoveryManager(
                         lastSeen = System.currentTimeMillis(),
                         protocolVersion = protocol,
                         model = model,
-                        isSelf = false
+                        isSelf = false,
+                        status = DeviceStatus.ONLINE,
+                        serviceName = resolvedInfo.serviceName
                     )
 
                     upsertResolvedDevice(resolvedInfo.serviceName, device)
@@ -249,19 +291,74 @@ class NsdDiscoveryManager(
         }
     }
 
-    private fun upsertResolvedDevice(serviceKey: String, device: Device) {
-        val duplicateKeys = deviceMap.entries.filter { (key, existing) ->
+    /**
+     * Deduplicates peers across multiple network interfaces (e.g. IPv4 LAN + IPv6 link-local)
+     * while preferring reachable LAN IPv4 addresses over link-local IPv6 addresses.
+     */
+    fun upsertResolvedDevice(serviceKey: String, device: Device) {
+        val cleanedPrimary = device.ipAddress.substringBefore('%')
+        val matchingEntries = deviceMap.entries.filter { (key, existing) ->
             key !in simulatedPeerIds &&
-                key != serviceKey &&
-                (existing.id == device.id ||
-                    (device.ipAddress.isNotBlank() &&
-                        existing.ipAddress == device.ipAddress &&
+                (key == serviceKey ||
+                    existing.id == device.id ||
+                    (cleanedPrimary.isNotBlank() &&
+                        existing.ipAddress == cleanedPrimary &&
                         existing.port == device.port))
-        }.map { it.key }
-        duplicateKeys.forEach { deviceMap.remove(it) }
+        }
 
-        deviceMap[serviceKey] = device
-        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+        val alternates = linkedSetOf<String>()
+        var preferredIp = cleanedPrimary
+        for ((_, existing) in matchingEntries) {
+            val oldIp = existing.ipAddress.substringBefore('%')
+            if (oldIp.isNotBlank() && oldIp != preferredIp) {
+                if (addressScore(oldIp) > addressScore(preferredIp)) {
+                    if (preferredIp.isNotBlank()) alternates.add(preferredIp)
+                    preferredIp = oldIp
+                } else {
+                    alternates.add(oldIp)
+                }
+            }
+            existing.alternateAddresses.forEach { alt ->
+                if (alt.isNotBlank() && alt != preferredIp) alternates.add(alt)
+            }
+            deviceMap.remove(existing.id)
+        }
+
+        matchingEntries.map { it.key }.filter { it != serviceKey }.forEach { deviceMap.remove(it) }
+
+        device.alternateAddresses.forEach { alt ->
+            val cleaned = alt.substringBefore('%')
+            if (cleaned.isNotBlank() && cleaned != preferredIp) alternates.add(cleaned)
+        }
+
+        deviceMap[serviceKey] = device.copy(
+            ipAddress = preferredIp,
+            isOnline = true,
+            status = DeviceStatus.ONLINE,
+            serviceName = device.serviceName.ifBlank { serviceKey },
+            alternateAddresses = alternates.toList()
+        )
+        emitSortedDevices()
+    }
+
+    private fun addressScore(ip: String): Int {
+        if (ip.isBlank()) return 0
+        val clean = ip.substringBefore('%').lowercase()
+        val isIpv4 = clean.contains('.') && !clean.startsWith("127.")
+        return when {
+            isIpv4 && !clean.startsWith("169.254.") -> 4 // Private/LAN IPv4
+            !clean.startsWith("fe80:") -> 3 // Global/ULA IPv6
+            isIpv4 -> 2 // Link-local IPv4
+            else -> 1 // Link-local IPv6
+        }
+    }
+
+    private fun emitSortedDevices() {
+        _discoveredDevices.update {
+            deviceMap.values.toList().sortedWith(
+                compareByDescending<Device> { it.isOnline }.thenBy { it.alias }
+            )
+        }
     }
 
     private fun parseAttributes(serviceInfo: NsdServiceInfo): Map<String, String> {
@@ -294,7 +391,12 @@ class NsdDiscoveryManager(
         }
     }
 
-    fun refreshDiscovery() {
+    fun refreshDiscovery(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastManualRefreshAtMs < MIN_REFRESH_COOLDOWN_MS) {
+            return
+        }
+        lastManualRefreshAtMs = now
         stopDiscovery()
         scope.launch {
             delay(300)
@@ -302,7 +404,31 @@ class NsdDiscoveryManager(
         }
     }
 
+    fun restartOnNetworkChange() {
+        val wasScanning = _isScanning.value
+        val wasAdvertising = _isAdvertising.value
+        val alias = lastAdvertisedAlias
+        val port = lastAdvertisedPort
+
+        stopDiscovery()
+        if (wasAdvertising) {
+            stopAdvertising()
+        }
+
+        scope.launch {
+            delay(400)
+            if (wasAdvertising && !alias.isNullOrBlank()) {
+                startAdvertising(alias, port)
+            }
+            if (wasScanning) {
+                startDiscovery()
+            }
+        }
+    }
+
     fun startAdvertising(alias: String, port: Int = DiscoveryProtocol.DEFAULT_PORT) {
+        lastAdvertisedAlias = alias
+        lastAdvertisedPort = port
         if (_isAdvertising.value) return
         if (nsdManager == null) return
 
@@ -381,12 +507,12 @@ class NsdDiscoveryManager(
     fun addSimulatedPeer(device: Device) {
         simulatedPeerIds.add(device.id)
         deviceMap[device.id] = device
-        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+        emitSortedDevices()
     }
 
     fun upsertDiscoveredPeerForTest(key: String, device: Device) {
         deviceMap[key] = device
-        _discoveredDevices.update { deviceMap.values.toList().sortedBy { it.alias } }
+        emitSortedDevices()
     }
 
     fun clearDevices() {

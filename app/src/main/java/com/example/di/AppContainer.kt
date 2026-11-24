@@ -22,10 +22,12 @@ import com.example.domain.repository.DeviceDiscoveryRepository
 import com.example.domain.repository.PairedDeviceRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.domain.repository.TransferRepository
+import com.example.util.PerformanceMonitor
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
 
 interface AppContainer {
+    val performanceMonitor: PerformanceMonitor
     val settingsDataStore: SettingsDataStore
     val settingsRepository: SettingsRepository
     val nsdDiscoveryManager: NsdDiscoveryManager
@@ -45,6 +47,10 @@ interface AppContainer {
 
 class DefaultAppContainer(private val context: Context) : AppContainer {
 
+    override val performanceMonitor: PerformanceMonitor by lazy {
+        PerformanceMonitor()
+    }
+
     override val settingsDataStore: SettingsDataStore by lazy {
         SettingsDataStore(context)
     }
@@ -54,7 +60,7 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val nsdDiscoveryManager: NsdDiscoveryManager by lazy {
-        NsdDiscoveryManager(context)
+        NsdDiscoveryManager(context, performanceMonitor)
     }
 
     override val deviceDiscoveryRepository: DeviceDiscoveryRepository by lazy {
@@ -74,11 +80,11 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val tcpServer: NetworkServer by lazy {
-        TcpServer()
+        TcpServer(performanceMonitor)
     }
 
     override val tcpClient: NetworkClient by lazy {
-        TcpClient()
+        TcpClient(performanceMonitor)
     }
 
     private val deviceId: String by lazy {
@@ -94,7 +100,8 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             client = tcpClient,
             myDeviceIdProvider = { deviceId },
             context = context,
-            pairedDeviceRepository = pairedDeviceRepository
+            pairedDeviceRepository = pairedDeviceRepository,
+            performanceMonitor = performanceMonitor
         )
     }
 
@@ -117,7 +124,8 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             settingsRepository = settingsRepository,
             connectionManager = connectionManager,
             notificationHelper = transferNotificationHelper,
-            myDeviceIdProvider = { deviceId }
+            myDeviceIdProvider = { deviceId },
+            performanceMonitor = performanceMonitor
         )
     }
 
@@ -138,7 +146,6 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     init {
-        // Configure unified TCP server stream message routing
         tcpServer.setStreamMessageHandler { message, socket, input ->
             val transferResponse = transferManager.handleProtocolMessage(message, socket, input)
             if (transferResponse != null) {
@@ -148,6 +155,14 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             }
         }
         connectionManager.onConnectionStateChanged = {
+            com.example.widget.WidgetUpdateHelper.requestUpdateAll(context)
+        }
+        connectionManager.onNetworkChanged = { connected ->
+            deviceDiscoveryRepository.updateNetworkStatus()
+            nsdDiscoveryManager.restartOnNetworkChange()
+            if (connected) {
+                transferManager.triggerAutoRetryOnNetworkRestored()
+            }
             com.example.widget.WidgetUpdateHelper.requestUpdateAll(context)
         }
         transferManager.onStateChangedListener = {

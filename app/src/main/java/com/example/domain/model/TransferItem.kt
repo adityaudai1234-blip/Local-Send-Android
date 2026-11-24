@@ -31,6 +31,12 @@ enum class TransferCategory {
     FAILED
 }
 
+enum class TransferPriority(val weight: Int, val label: String) {
+    HIGH(3, "High"),
+    NORMAL(2, "Normal"),
+    LOW(1, "Low")
+}
+
 data class TransferItem(
     val id: String,
     val fileName: String,
@@ -54,7 +60,15 @@ data class TransferItem(
     val fileExtension: String = fileName.substringAfterLast('.', ""),
     val relativePath: String? = null,
     val avgSpeedBytesPerSec: Long = 0L,
-    val peakSpeedBytesPerSec: Long = 0L
+    val peakSpeedBytesPerSec: Long = 0L,
+    val priority: TransferPriority = TransferPriority.NORMAL,
+    val queueOrder: Int = 0,
+    val bytesTransferred: Long = 0L,
+    val isPaused: Boolean = false,
+    val retryCount: Int = 0,
+    val isDirectory: Boolean = false,
+    val partialChecksum: String? = null,
+    val sourceUri: String? = null
 ) {
     val category: TransferCategory
         get() = when (status) {

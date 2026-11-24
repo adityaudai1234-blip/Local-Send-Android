@@ -2,8 +2,6 @@ package com.example.data.transfer
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.security.MessageDigest
 
 data class FileMetadata(
     val fileId: String,
@@ -12,7 +10,8 @@ data class FileMetadata(
     val mimeType: String = "application/octet-stream",
     val checksum: String = "",
     val offset: Long = 0L,
-    val relativePath: String? = null
+    val relativePath: String? = null,
+    val isDirectory: Boolean = false
 ) {
     val formattedSize: String
         get() = com.example.domain.model.TransferItem.formatBytes(fileSize)
@@ -27,6 +26,9 @@ data class FileMetadata(
         json.put("offset", offset)
         if (!relativePath.isNullOrBlank()) {
             json.put("relativePath", relativePath)
+        }
+        if (isDirectory) {
+            json.put("isDirectory", true)
         }
         return json
     }
@@ -44,7 +46,8 @@ data class FileMetadata(
                 mimeType = json.optString("mimeType", "application/octet-stream"),
                 checksum = json.optString("checksum", ""),
                 offset = json.optLong("offset", 0L),
-                relativePath = sanitizedRel
+                relativePath = sanitizedRel,
+                isDirectory = json.optBoolean("isDirectory", false)
             )
         }
 

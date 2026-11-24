@@ -32,6 +32,7 @@ interface SettingsRepository {
     suspend fun setMaxConcurrent(count: Int)
     suspend fun setTransferBufferSizeKb(sizeKb: Int)
     suspend fun setDuplicateHandling(handling: String)
+    suspend fun setAskOnConflictInUi(enabled: Boolean) {}
     suspend fun setPreserveOriginalNames(enabled: Boolean)
     suspend fun setAutoOpenCompleted(enabled: Boolean)
     suspend fun setMaxAcceptedFileSizeMb(sizeMb: Long)

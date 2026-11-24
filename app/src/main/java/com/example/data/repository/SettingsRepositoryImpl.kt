@@ -56,6 +56,7 @@ class SettingsRepositoryImpl(
     override suspend fun setMaxConcurrent(count: Int) = dataStore.updateMaxConcurrent(count)
     override suspend fun setTransferBufferSizeKb(sizeKb: Int) = dataStore.updateTransferBufferSizeKb(sizeKb)
     override suspend fun setDuplicateHandling(handling: String) = dataStore.updateDuplicateHandling(handling)
+    override suspend fun setAskOnConflictInUi(enabled: Boolean) = dataStore.updateAskOnConflictInUi(enabled)
     override suspend fun setPreserveOriginalNames(enabled: Boolean) = dataStore.updatePreserveOriginalNames(enabled)
     override suspend fun setAutoOpenCompleted(enabled: Boolean) = dataStore.updateAutoOpenCompleted(enabled)
     override suspend fun setMaxAcceptedFileSizeMb(sizeMb: Long) = dataStore.updateMaxAcceptedFileSizeMb(sizeMb)

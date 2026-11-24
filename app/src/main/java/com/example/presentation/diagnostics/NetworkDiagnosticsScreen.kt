@@ -11,18 +11,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Wifi
@@ -31,12 +35,15 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,26 +51,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material3.FilterChip
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import com.example.domain.model.AppErrorMapper
 import com.example.domain.model.ErrorCategory
+import com.example.domain.model.TransferItem
 import com.example.presentation.components.CategorizedErrorCard
 import com.example.presentation.components.SectionHeader
 import com.example.presentation.components.StatusBadge
-import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
+import com.example.util.ClipboardUtils
+import kotlinx.coroutines.launch
 import java.util.Date
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,7 +85,13 @@ fun NetworkDiagnosticsScreen(
 ) {
     BackHandler(onBack = onBack)
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
     val report by viewModel.report.collectAsState()
+    val perf by viewModel.performanceSnapshot.collectAsState()
+    val peerLatencies by viewModel.peerLatenciesMs.collectAsState()
     val pairedDevices by viewModel.pairedDevices.collectAsState()
     val recentErrors by viewModel.recentErrors.collectAsState()
     val appErrors by viewModel.appErrors.collectAsState()
@@ -110,6 +126,7 @@ fun NetworkDiagnosticsScreen(
         modifier = modifier
             .fillMaxSize()
             .testTag("network_diagnostics_screen"),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -120,9 +137,11 @@ fun NetworkDiagnosticsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = report.networkName,
+                            text = "${report.networkName} • ${report.transportTypeLabel}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 },
@@ -152,7 +171,12 @@ fun NetworkDiagnosticsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { SectionHeader(title = "Live Network & Socket State") }
+            item {
+                SectionHeader(
+                    title = "Live Network & Socket State",
+                    modifier = Modifier.semantics { heading() }
+                )
+            }
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -183,14 +207,18 @@ fun NetworkDiagnosticsScreen(
                                 color = if (report.isNetworkConnected) StatusSuccess else StatusWarning
                             )
                         }
+                        DiagRow("Transport Type", report.transportTypeLabel)
                         DiagRow("Network Name", report.networkName)
+                        DiagRow("Interface", report.interfaceName)
                         DiagRow("Local IPv4 Address", report.localIp)
+                        DiagRow("Local IPv6 Address", report.localIpv6)
                         DiagRow("Active Interfaces", report.interfaceSummary)
-                        DiagRow("mDNS Discovery", report.discoveryStatusText)
+                        DiagRow("mDNS Discovery (UDP ${report.mdnsPort})", report.discoveryStatusText)
                         DiagRow(
                             "TCP Listener",
                             if (report.isServerRunning) "Listening on port ${report.listeningPort}" else "Stopped"
                         )
+                        DiagRow("Active Transfer Sockets", "${perf.activeSocketCount}")
                         DiagRow("Discovered Nearby", "${report.discoveredCount} peer(s)")
                         DiagRow("Connected Paired Peers", "${report.connectedPairedCount} peer(s)")
                         DiagRow("Network Monitor", if (report.isNetworkMonitorActive) "Active (auto-reconnect enabled)" else "Unavailable")
@@ -198,7 +226,84 @@ fun NetworkDiagnosticsScreen(
                 }
             }
 
-            item { SectionHeader(title = "Interactive Tests") }
+            item {
+                SectionHeader(
+                    title = "Measured Performance & Recovery",
+                    modifier = Modifier.semantics { heading() }
+                )
+            }
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("performance_metrics_card"),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Speed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Live Telemetry (On-Device Only)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        DiagRow(
+                            "Discovery Latency",
+                            if (perf.discoveryDurationMs > 0L) "${perf.discoveryDurationMs} ms" else "Not measured yet"
+                        )
+                        DiagRow(
+                            "Last Peer Connect Time",
+                            if (perf.lastConnectionDurationMs > 0L) "${perf.lastConnectionDurationMs} ms" else "Not measured yet"
+                        )
+                        DiagRow(
+                            "Measured Send Speed",
+                            if (perf.measuredSendBytesPerSec > 0L) {
+                                "${TransferItem.formatBytes(perf.measuredSendBytesPerSec)}/s"
+                            } else "Not measured yet"
+                        )
+                        DiagRow(
+                            "Measured Receive Speed",
+                            if (perf.measuredReceiveBytesPerSec > 0L) {
+                                "${TransferItem.formatBytes(perf.measuredReceiveBytesPerSec)}/s"
+                            } else "Not measured yet"
+                        )
+                        DiagRow(
+                            "Peak Throughput",
+                            if (perf.peakMeasuredSpeedBytesPerSec > 0L) {
+                                "${TransferItem.formatBytes(perf.peakMeasuredSpeedBytesPerSec)}/s"
+                            } else "Not measured yet"
+                        )
+                        DiagRow(
+                            "Retries / Recoveries",
+                            "${perf.totalRetries} retry(s) • ${perf.recoverySuccesses}/${perf.recoveryAttempts} recovered"
+                        )
+                        DiagRow(
+                            "App JVM Heap",
+                            if (perf.maxMemoryBytes > 0L) {
+                                "${TransferItem.formatBytes(perf.usedMemoryBytes)} / ${TransferItem.formatBytes(perf.maxMemoryBytes)}"
+                            } else "Unavailable"
+                        )
+                    }
+                }
+            }
+
+            item {
+                SectionHeader(
+                    title = "Interactive Tests & Export",
+                    modifier = Modifier.semantics { heading() }
+                )
+            }
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -223,6 +328,7 @@ fun NetworkDiagnosticsScreen(
                                 enabled = !report.isTesting,
                                 modifier = Modifier
                                     .weight(1f)
+                                    .heightIn(min = 48.dp)
                                     .testTag("test_port_button"),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
@@ -235,6 +341,7 @@ fun NetworkDiagnosticsScreen(
                                 onClick = { viewModel.restartDiscovery() },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .heightIn(min = 48.dp)
                                     .testTag("restart_discovery_button"),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
@@ -248,12 +355,38 @@ fun NetworkDiagnosticsScreen(
                             onClick = { viewModel.triggerReconnectAll() },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 48.dp)
                                 .testTag("reconnect_all_peers_button"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Trigger Bounded Reconnect (Max 3 Retries)")
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                val copied = ClipboardUtils.copyText(
+                                    context = context,
+                                    label = "LocalDrop Network Diagnostics",
+                                    text = viewModel.buildCopyableNetworkReport()
+                                )
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (copied) "Network diagnostics copied to clipboard"
+                                        else "Unable to access clipboard"
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("copy_network_info_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Copy Network Info")
                         }
 
                         report.localPortCheckMessage?.let { msg ->
@@ -269,8 +402,20 @@ fun NetworkDiagnosticsScreen(
             }
 
             if (pairedDevices.isNotEmpty()) {
-                item { SectionHeader(title = "Paired Peer Latency Checks") }
+                item {
+                    SectionHeader(
+                        title = "Paired Peer Latency Checks",
+                        modifier = Modifier.semantics { heading() }
+                    )
+                }
                 items(pairedDevices, key = { it.id }) { peer ->
+                    val pingResult = report.peerLatencyResults[peer.id]
+                    val measuredHeartbeatRtt = peerLatencies[peer.id]
+                    val subtitle = pingResult ?: if (measuredHeartbeatRtt != null) {
+                        "${peer.ipAddress}:${peer.port} • ${measuredHeartbeatRtt}ms RTT"
+                    } else {
+                        "${peer.ipAddress}:${peer.port}"
+                    }
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
@@ -289,14 +434,16 @@ fun NetworkDiagnosticsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(peer.alias, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    text = report.peerLatencyResults[peer.id] ?: "${peer.ipAddress}:${peer.port}",
+                                    text = subtitle,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             FilledTonalButton(
                                 onClick = { viewModel.pingPairedDevice(peer) },
-                                modifier = Modifier.testTag("ping_peer_${peer.id}")
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("ping_peer_${peer.id}")
                             ) {
                                 Text("Ping")
                             }
@@ -312,7 +459,10 @@ fun NetworkDiagnosticsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        SectionHeader(title = "Local Crash Diagnostic (On-Device Only)")
+                        SectionHeader(
+                            title = "Local Crash Diagnostic (On-Device Only)",
+                            modifier = Modifier.semantics { heading() }
+                        )
                         TextButton(
                             onClick = { viewModel.clearLastCrashSummary() },
                             modifier = Modifier.testTag("clear_crash_log_button")
@@ -356,7 +506,10 @@ fun NetworkDiagnosticsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        SectionHeader(title = "Categorized Error Log (${filteredErrors.size})")
+                        SectionHeader(
+                            title = "Categorized Error Log (${filteredErrors.size})",
+                            modifier = Modifier.semantics { heading() }
+                        )
                         if (combinedErrors.isNotEmpty()) {
                             TextButton(
                                 onClick = { viewModel.clearErrors() },
@@ -411,7 +564,12 @@ fun NetworkDiagnosticsScreen(
                 }
             }
 
-            item { SectionHeader(title = "Troubleshooting Guide") }
+            item {
+                SectionHeader(
+                    title = "Troubleshooting Guide",
+                    modifier = Modifier.semantics { heading() }
+                )
+            }
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -430,7 +588,7 @@ fun NetworkDiagnosticsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.14f))
                         TipRow("AP / Client Isolation", "Guest Wi-Fi networks often block peer-to-peer mDNS and direct TCP sockets.")
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.14f))
-                        TipRow("Desktop Firewall", "Allow incoming TCP on port ${report.listeningPort} and UDP 5353 in Windows/macOS/Linux firewall.")
+                        TipRow("Desktop Firewall", "Allow incoming TCP on port ${report.listeningPort} and UDP ${report.mdnsPort} in Windows/macOS/Linux firewall.")
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.14f))
                         TipRow("Peer Unreachable", "Use 'Restart mDNS' if the remote laptop slept or changed DHCP IP address.")
                     }
@@ -449,14 +607,20 @@ private fun DiagRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.45f)
+        )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(0.55f, fill = false)
         )
     }
 }

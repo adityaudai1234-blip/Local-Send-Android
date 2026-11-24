@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [PairedDeviceEntity::class, TransferEntity::class], version = 4, exportSchema = false)
+@Database(entities = [PairedDeviceEntity::class, TransferEntity::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun pairedDeviceDao(): PairedDeviceDao
@@ -83,10 +83,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                addColumnIfMissing(db, "paired_devices", "model", "TEXT")
+                addColumnIfMissing(db, "transfer_history", "priority", "TEXT NOT NULL DEFAULT 'NORMAL'")
+                addColumnIfMissing(db, "transfer_history", "queueOrder", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "transfer_history", "bytesTransferred", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "transfer_history", "isPaused", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "transfer_history", "retryCount", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "transfer_history", "isDirectory", "INTEGER NOT NULL DEFAULT 0")
+                addColumnIfMissing(db, "transfer_history", "partialChecksum", "TEXT")
+                addColumnIfMissing(db, "transfer_history", "sourceUri", "TEXT")
+            }
+        }
+
         val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
-            MIGRATION_3_4
+            MIGRATION_3_4,
+            MIGRATION_4_5
         )
 
         private fun addColumnIfMissing(

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -32,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.example.domain.model.TransferItem
 import com.example.presentation.components.FilePreviewDialog
 import com.example.presentation.components.FilePreviewThumbnail
+import com.example.ui.theme.StatusWarning
 import java.util.Locale
 
 @Composable
@@ -62,8 +65,9 @@ fun FileSelectionDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val totalBytes = files.sumOf { it.size }
-    val formattedTotalSize = TransferItem.formatBytes(totalBytes)
+    val summary = remember(files) { SelectedFile.summarize(files) }
+    val formattedTotalSize = TransferItem.formatBytes(summary.totalBytes)
+    val hasValidFiles = files.any { it.isDirectory || it.isAccessible }
     var previewFile by remember { mutableStateOf<SelectedFile?>(null) }
 
     val pickerLauncher = rememberLauncherForActivityResult(
@@ -98,9 +102,13 @@ fun FileSelectionDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Selected Files (${files.size})",
+                        text = if (summary.folderCount > 0) {
+                            "${summary.fileCount} File(s) • ${summary.folderCount} Folder(s)"
+                        } else {
+                            "Selected Files (${files.size})"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -134,6 +142,35 @@ fun FileSelectionDialog(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                if (summary.inaccessibleCount > 0) {
+                    Surface(
+                        color = StatusWarning.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .testTag("inaccessible_files_warning")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WarningAmber,
+                                contentDescription = "Unreadable files warning",
+                                tint = StatusWarning,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${summary.inaccessibleCount} file(s) could not be read (permission expired or cloud-only). Remove or re-pick them.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
                 if (files.isEmpty()) {
                     Box(
                         modifier = Modifier
@@ -151,13 +188,13 @@ fun FileSelectionDialog(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 280.dp),
+                            .heightIn(max = 260.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(items = files, key = { it.uri.toString() + (it.relativePath ?: "") }) { file ->
+                        items(items = files, key = { it.uri.toString() + (it.relativePath ?: "") + it.isDirectory }) { file ->
                             SelectedFileRow(
                                 file = file,
-                                onPreview = { previewFile = file },
+                                onPreview = { if (!file.isDirectory) previewFile = file },
                                 onRemove = { onRemoveFile(file) }
                             )
                         }
@@ -174,6 +211,7 @@ fun FileSelectionDialog(
                         onClick = { pickerLauncher.launch(arrayOf("*/*")) },
                         modifier = Modifier
                             .weight(1f)
+                            .heightIn(min = 48.dp)
                             .testTag("add_more_files_button"),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -193,6 +231,7 @@ fun FileSelectionDialog(
                         onClick = { folderPickerLauncher.launch(null) },
                         modifier = Modifier
                             .weight(1f)
+                            .heightIn(min = 48.dp)
                             .testTag("add_folder_button"),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -213,9 +252,11 @@ fun FileSelectionDialog(
         confirmButton = {
             Button(
                 onClick = onProceedToDevices,
-                enabled = files.isNotEmpty(),
+                enabled = hasValidFiles,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("proceed_to_devices_button")
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("proceed_to_devices_button")
             ) {
                 Text("Select Destination →")
             }
@@ -224,7 +265,9 @@ fun FileSelectionDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("cancel_file_selection_button")
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("cancel_file_selection_button")
             ) {
                 Text("Cancel")
             }
@@ -256,9 +299,20 @@ private fun SelectedFileRow(
             .clickable(onClick = onPreview),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = if (file.isAccessible || file.isDirectory) {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            } else {
+                StatusWarning.copy(alpha = 0.1f)
+            }
         ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+        border = BorderStroke(
+            1.dp,
+            if (file.isAccessible || file.isDirectory) {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            } else {
+                StatusWarning.copy(alpha = 0.45f)
+            }
+        )
     ) {
         Row(
             modifier = Modifier
@@ -266,12 +320,21 @@ private fun SelectedFileRow(
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilePreviewThumbnail(
-                fileName = file.name,
-                mimeType = file.mimeType,
-                uri = file.uri,
-                size = 40.dp
-            )
+            if (file.isDirectory) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = "Empty folder",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(40.dp)
+                )
+            } else {
+                FilePreviewThumbnail(
+                    fileName = file.name,
+                    mimeType = file.mimeType,
+                    uri = file.uri,
+                    size = 40.dp
+                )
+            }
 
             Spacer(modifier = Modifier.width(10.dp))
 
@@ -304,7 +367,15 @@ private fun SelectedFileRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (!file.folderDisplayPath.isNullOrBlank()) {
+                if (!file.accessError.isNullOrBlank()) {
+                    Text(
+                        text = file.accessError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = StatusWarning,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else if (!file.folderDisplayPath.isNullOrBlank() || (file.isDirectory && !file.relativePath.isNullOrBlank())) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Folder,
@@ -314,7 +385,7 @@ private fun SelectedFileRow(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = file.folderDisplayPath.orEmpty(),
+                            text = file.folderDisplayPath ?: file.relativePath.orEmpty(),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             maxLines = 1,
@@ -327,12 +398,12 @@ private fun SelectedFileRow(
             IconButton(
                 onClick = onRemove,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(48.dp)
                     .testTag("remove_file_${file.name}")
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
-                    contentDescription = "Remove file",
+                    contentDescription = "Remove ${file.name}",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )

@@ -4,6 +4,7 @@ import android.util.Log
 import com.example.data.protocol.MessageFraming
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.security.SecurityValidator
+import com.example.util.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,7 +20,9 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
-class TcpServer : NetworkServer {
+class TcpServer(
+    private val performanceMonitor: PerformanceMonitor? = null
+) : NetworkServer {
 
     companion object {
         private const val TAG = "TcpServer"
@@ -74,6 +77,7 @@ class TcpServer : NetworkServer {
                             continue
                         }
                         activeClientSockets.add(clientSocket)
+                        performanceMonitor?.onSocketOpened()
                         handleClient(clientSocket)
                     } catch (e: Exception) {
                         if (isActive && !server.isClosed) {
@@ -162,6 +166,7 @@ class TcpServer : NetworkServer {
             } finally {
                 activeClientSockets.remove(initialSocket)
                 activeClientSockets.remove(activeSocket)
+                performanceMonitor?.onSocketClosed()
                 try {
                     activeSocket.close()
                 } catch (_: Exception) {}

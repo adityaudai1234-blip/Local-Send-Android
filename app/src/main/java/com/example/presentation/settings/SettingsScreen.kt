@@ -295,10 +295,20 @@ fun SettingsScreen(
                         subtitle = when (settings.duplicateHandling) {
                             "overwrite" -> "Overwrite existing file"
                             "skip" -> "Skip duplicate file"
+                            "keep_both" -> "Keep both (filename (1).ext)"
                             else -> "Rename automatically (file (1).ext)"
                         },
                         onClick = { showDuplicateDialog = true },
                         modifier = Modifier.testTag("setting_duplicate_handling")
+                    )
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Default.ContentCopy,
+                        title = "Ask Before Replacing Conflicts",
+                        subtitle = "Prompt Replace / Skip / Rename / Keep Both while app is open",
+                        checked = settings.askOnConflictInUi,
+                        onCheckedChange = { viewModel.updateAskOnConflictInUi(it) },
+                        modifier = Modifier.testTag("switch_ask_conflict")
                     )
                     SettingsDivider()
                     SettingsToggleRow(
@@ -681,10 +691,12 @@ fun SettingsScreen(
             selectedLabel = when (settings.duplicateHandling) {
                 "overwrite" -> "Overwrite existing file"
                 "skip" -> "Skip duplicate file"
+                "keep_both" -> "Keep both files"
                 else -> "Rename automatically"
             },
             options = listOf(
                 "Rename automatically" to { viewModel.updateDuplicateHandling("rename") },
+                "Keep both files" to { viewModel.updateDuplicateHandling("keep_both") },
                 "Overwrite existing file" to { viewModel.updateDuplicateHandling("overwrite") },
                 "Skip duplicate file" to { viewModel.updateDuplicateHandling("skip") }
             ),

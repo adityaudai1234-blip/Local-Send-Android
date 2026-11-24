@@ -7,6 +7,7 @@ import com.example.data.transfer.TransferManager
 import com.example.domain.model.TransferCategory
 import com.example.domain.model.TransferDirection
 import com.example.domain.model.TransferItem
+import com.example.domain.model.TransferPriority
 import com.example.domain.model.TransferStats
 import com.example.domain.repository.TransferRepository
 import kotlinx.coroutines.CoroutineScope
@@ -29,14 +30,20 @@ class TransferRepositoryImpl(
 
     override val transferHistory: StateFlow<List<TransferItem>> = transferManager.transferHistory
 
-    // Merges live active transfers with persistent transfer history from Room
+    // Merges live active/queued transfers with persistent transfer history from Room
     override val transfers: StateFlow<List<TransferItem>> = combine(
         transferManager.activeTransfers,
         transferManager.transferHistory
     ) { activeList, historyList ->
         val activeIds = activeList.map { it.id }.toSet()
         val filteredHistory = historyList.filter { it.id !in activeIds }
-        (activeList + filteredHistory).sortedByDescending { it.timestamp }
+        val activeSorted = activeList.sortedWith(
+            compareByDescending<TransferItem> { it.priority.weight }
+                .thenBy { it.queueOrder }
+                .thenByDescending { it.timestamp }
+        )
+        val historySorted = filteredHistory.sortedByDescending { it.timestamp }
+        activeSorted + historySorted
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     override val stats: StateFlow<TransferStats> = transferManager.stats
@@ -77,19 +84,32 @@ class TransferRepositoryImpl(
                     timestamp = item.timestamp,
                     relativePath = item.relativePath,
                     avgSpeedBytesPerSec = item.avgSpeedBytesPerSec,
-                    peakSpeedBytesPerSec = item.peakSpeedBytesPerSec
+                    peakSpeedBytesPerSec = item.peakSpeedBytesPerSec,
+                    priority = item.priority.name,
+                    queueOrder = item.queueOrder,
+                    bytesTransferred = item.bytesTransferred,
+                    isPaused = item.isPaused,
+                    retryCount = item.retryCount,
+                    isDirectory = item.isDirectory,
+                    partialChecksum = item.partialChecksum,
+                    sourceUri = item.sourceUri
                 )
             )
         }
     }
 
-    override fun cancelTransfer(id: String) {
-        transferManager.cancelTransfer(id)
-    }
-
-    override fun retryTransfer(id: String) {
-        transferManager.retryFailedTransfer(id)
-    }
+    override fun cancelTransfer(id: String) = transferManager.cancelTransfer(id)
+    override fun retryTransfer(id: String) = transferManager.retryFailedTransfer(id)
+    override fun pauseTransfer(id: String) = transferManager.pauseTransfer(id)
+    override fun resumeTransfer(id: String) = transferManager.resumeTransfer(id)
+    override fun setTransferPriority(id: String, priority: TransferPriority) = transferManager.setTransferPriority(id, priority)
+    override fun moveTransferUp(id: String) = transferManager.moveTransferUp(id)
+    override fun moveTransferDown(id: String) = transferManager.moveTransferDown(id)
+    override fun pauseAll() = transferManager.pauseAllTransfers()
+    override fun resumeAll() = transferManager.resumeAllTransfers()
+    override fun cancelAll() = transferManager.cancelAllTransfers()
+    override fun retryAllFailed() = transferManager.retryAllFailed()
+    override fun removeCompletedFromQueue() = transferManager.clearCompleted()
 
     override fun clearCompleted() {
         transferManager.clearCompleted()

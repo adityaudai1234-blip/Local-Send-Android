@@ -7,7 +7,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -17,9 +21,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -64,8 +72,10 @@ import com.example.presentation.settings.SettingsViewModel
 import com.example.presentation.storage.ReceivedFilesScreen
 import com.example.presentation.storage.StorageManagementScreen
 import com.example.presentation.storage.StorageViewModel
+import com.example.presentation.transfer.FileConflictDialog
 import com.example.presentation.transfers.TransfersScreen
 import com.example.presentation.transfers.TransfersViewModel
+import com.example.util.rememberReducedMotion
 import com.example.widget.WidgetUpdateHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -75,6 +85,8 @@ fun MainAppScaffold(
     app: LocalDropApp,
     sharedUris: List<Uri> = emptyList(),
     onSharedUrisConsumed: () -> Unit = {},
+    sharedText: Pair<String, String?>? = null,
+    onSharedTextConsumed: () -> Unit = {},
     widgetAction: String? = null,
     widgetTargetDeviceId: String? = null,
     onWidgetActionConsumed: () -> Unit = {},
@@ -96,12 +108,26 @@ fun MainAppScaffold(
 
     val settings by settingsViewModel.settings.collectAsState()
     val settingsLoaded by app.container.settingsRepository.isLoaded.collectAsState()
+    val activeConflictPrompt by app.container.transferManager.activeConflictPrompt.collectAsState()
+    val reducedMotion = rememberReducedMotion()
+
+    // Inform TransferManager that interactive UI is attached for conflict prompts
+    DisposableEffect(app.container.transferManager) {
+        app.container.transferManager.setInteractiveConflictUiAvailable(true)
+        onDispose {
+            app.container.transferManager.setInteractiveConflictUiAvailable(false)
+        }
+    }
 
     var initialOnboardingChecked by remember { mutableStateOf(false) }
-    LaunchedEffect(settingsLoaded, settings.hasCompletedOnboarding, sharedUris, widgetAction) {
+    LaunchedEffect(settingsLoaded, settings.hasCompletedOnboarding, sharedUris, sharedText, widgetAction) {
         if (settingsLoaded && !initialOnboardingChecked) {
             initialOnboardingChecked = true
-            if (!settings.hasCompletedOnboarding && sharedUris.isEmpty() && widgetAction.isNullOrBlank()) {
+            if (!settings.hasCompletedOnboarding &&
+                sharedUris.isEmpty() &&
+                sharedText == null &&
+                widgetAction.isNullOrBlank()
+            ) {
                 navController.navigate(Screen.ROUTE_ONBOARDING) {
                     launchSingleTop = true
                 }
@@ -126,7 +152,7 @@ fun MainAppScaffold(
         widgetTargetPending = null
     }
 
-    // Handle Android Share Sheet (ACTION_SEND / ACTION_SEND_MULTIPLE)
+    // Handle Android Share Sheet URIs (ACTION_SEND / ACTION_SEND_MULTIPLE)
     LaunchedEffect(sharedUris) {
         if (sharedUris.isNotEmpty()) {
             navController.navigate(Screen.Home.route) {
@@ -138,6 +164,22 @@ fun MainAppScaffold(
             }
             homeViewModel.onSharedFilesReceived(sharedUris, context)
             onSharedUrisConsumed()
+        }
+    }
+
+    // Handle Android Share Sheet plain text / note snippet (ACTION_SEND text/plain)
+    LaunchedEffect(sharedText) {
+        val textPair = sharedText
+        if (textPair != null && textPair.first.isNotBlank()) {
+            navController.navigate(Screen.Home.route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+            homeViewModel.onSharedTextReceived(textPair.first, textPair.second, context)
+            onSharedTextConsumed()
         }
     }
 
@@ -167,289 +209,359 @@ fun MainAppScaffold(
     }
 
     val isTopLevelRoute = Screen.bottomNavItems.any { it.route == currentRoute }
+    val navAnimDuration = if (reducedMotion) 0 else 220
 
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        bottomBar = {
-            if (isTopLevelRoute) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    tonalElevation = 8.dp,
-                    modifier = Modifier.testTag("bottom_navigation_bar")
-                ) {
-                    Screen.bottomNavItems.forEach { screen ->
-                        val isSelected = currentRoute == screen.route
-                        NavigationBarItem(
-                            selected = isSelected,
-                            onClick = {
-                                if (currentRoute != screen.route) {
-                                    navController.navigate(screen.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
-                                            saveState = true
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useNavigationRail = maxWidth >= 600.dp
+
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            bottomBar = {
+                if (isTopLevelRoute && !useNavigationRail) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        tonalElevation = 8.dp,
+                        modifier = Modifier.testTag("bottom_navigation_bar")
+                    ) {
+                        Screen.bottomNavItems.forEach { screen ->
+                            val isSelected = currentRoute == screen.route
+                            NavigationBarItem(
+                                selected = isSelected,
+                                onClick = {
+                                    if (currentRoute != screen.route) {
+                                        navController.navigate(screen.route) {
+                                            popUpTo(navController.graph.findStartDestination().id) {
+                                                saveState = true
+                                            }
+                                            launchSingleTop = true
+                                            restoreState = true
                                         }
-                                        launchSingleTop = true
-                                        restoreState = true
                                     }
-                                }
-                            },
-                            icon = {
-                                Icon(
-                                    imageVector = if (isSelected) screen.filledIcon else screen.outlinedIcon,
-                                    contentDescription = screen.title
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = screen.title,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            modifier = Modifier.testTag("nav_item_${screen.route}")
-                        )
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (isSelected) screen.filledIcon else screen.outlinedIcon,
+                                        contentDescription = screen.title
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = screen.title,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag("nav_item_${screen.route}")
+                            )
+                        }
                     }
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentAlignment = Alignment.TopCenter
-        ) {
-            Box(
+        ) { innerPadding ->
+            Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .widthIn(max = 720.dp)
+                    .padding(innerPadding)
             ) {
-                NavHost(
-                    navController = navController,
-                    startDestination = Screen.Home.route,
-                    enterTransition = { fadeIn(animationSpec = tween(220)) },
-                    exitTransition = { fadeOut(animationSpec = tween(220)) },
-                    popEnterTransition = { fadeIn(animationSpec = tween(220)) },
-                    popExitTransition = { fadeOut(animationSpec = tween(220)) }
+                if (isTopLevelRoute && useNavigationRail) {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .testTag("side_navigation_rail")
+                    ) {
+                        Spacer(modifier = Modifier.weight(0.1f))
+                        Screen.bottomNavItems.forEach { screen ->
+                            val isSelected = currentRoute == screen.route
+                            NavigationRailItem(
+                                selected = isSelected,
+                                onClick = {
+                                    if (currentRoute != screen.route) {
+                                        navController.navigate(screen.route) {
+                                            popUpTo(navController.graph.findStartDestination().id) {
+                                                saveState = true
+                                            }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    }
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (isSelected) screen.filledIcon else screen.outlinedIcon,
+                                        contentDescription = screen.title
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = screen.title,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag("nav_item_${screen.route}")
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize(),
+                    contentAlignment = Alignment.TopCenter
                 ) {
-                    composable(Screen.Home.route) {
-                        HomeScreen(
-                            viewModel = homeViewModel,
-                            onNavigateToDevices = {
-                                navController.navigate(Screen.Devices.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            onNavigateToTransfers = {
-                                navController.navigate(Screen.Transfers.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            onNavigateToReceivedFiles = {
-                                navController.navigate(Screen.ROUTE_RECEIVED_FILES)
-                            },
-                            onNavigateToDiagnostics = {
-                                navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
-                            },
-                            onNavigateToPrivacyDashboard = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
-                            }
-                        )
-                    }
-
-                    composable(Screen.Devices.route) {
-                        DevicesScreen(
-                            viewModel = devicesViewModel,
-                            onDeviceSelected = {
-                                navController.navigate(Screen.Home.route)
-                            },
-                            onManageTrustedClick = {
-                                navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
-                            }
-                        )
-                    }
-
-                    composable(Screen.Transfers.route) {
-                        TransfersScreen(
-                            viewModel = transfersViewModel,
-                            onOpenTransferDetails = { transferId ->
-                                navController.navigate(Screen.transferDetailsRoute(transferId))
-                            }
-                        )
-                    }
-
-                    composable(Screen.Settings.route) {
-                        SettingsScreen(
-                            viewModel = settingsViewModel,
-                            onNavigateToTrustedDevices = {
-                                navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
-                            },
-                            onNavigateToStorageManagement = {
-                                navController.navigate(Screen.ROUTE_STORAGE_MANAGEMENT)
-                            },
-                            onNavigateToReceivedFiles = {
-                                navController.navigate(Screen.ROUTE_RECEIVED_FILES)
-                            },
-                            onNavigateToDiagnostics = {
-                                navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
-                            },
-                            onNavigateToPrivacyDashboard = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
-                            },
-                            onNavigateToPrivacyPolicy = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
-                            },
-                            onNavigateToAbout = {
-                                navController.navigate(Screen.ROUTE_ABOUT)
-                            },
-                            onNavigateToOnboarding = {
-                                navController.navigate(Screen.ROUTE_ONBOARDING)
-                            }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_ONBOARDING) {
-                        OnboardingScreen(
-                            settingsViewModel = settingsViewModel,
-                            onOpenPrivacyPolicy = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
-                            },
-                            onFinishOnboarding = { action ->
-                                // Mark current release version seen when completing fresh onboarding
-                                settingsViewModel.updateLastSeenReleaseVersion(BuildConfig.VERSION_NAME)
-                                when (action) {
-                                    OnboardingNextAction.FIND_DEVICES -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 840.dp)
+                    ) {
+                        NavHost(
+                            navController = navController,
+                            startDestination = Screen.Home.route,
+                            enterTransition = { fadeIn(animationSpec = tween(navAnimDuration)) },
+                            exitTransition = { fadeOut(animationSpec = tween(navAnimDuration)) },
+                            popEnterTransition = { fadeIn(animationSpec = tween(navAnimDuration)) },
+                            popExitTransition = { fadeOut(animationSpec = tween(navAnimDuration)) }
+                        ) {
+                            composable(Screen.Home.route) {
+                                HomeScreen(
+                                    viewModel = homeViewModel,
+                                    onNavigateToDevices = {
                                         navController.navigate(Screen.Devices.route) {
-                                            popUpTo(Screen.Home.route) { inclusive = false }
+                                            popUpTo(navController.graph.findStartDestination().id) {
+                                                saveState = true
+                                            }
                                             launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    onNavigateToTransfers = {
+                                        navController.navigate(Screen.Transfers.route) {
+                                            popUpTo(navController.graph.findStartDestination().id) {
+                                                saveState = true
+                                            }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    onNavigateToReceivedFiles = {
+                                        navController.navigate(Screen.ROUTE_RECEIVED_FILES)
+                                    },
+                                    onNavigateToDiagnostics = {
+                                        navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
+                                    },
+                                    onNavigateToPrivacyDashboard = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
+                                    }
+                                )
+                            }
+
+                            composable(Screen.Devices.route) {
+                                DevicesScreen(
+                                    viewModel = devicesViewModel,
+                                    onDeviceSelected = {
+                                        navController.navigate(Screen.Home.route)
+                                    },
+                                    onManageTrustedClick = {
+                                        navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
+                                    }
+                                )
+                            }
+
+                            composable(Screen.Transfers.route) {
+                                TransfersScreen(
+                                    viewModel = transfersViewModel,
+                                    onOpenTransferDetails = { transferId ->
+                                        navController.navigate(Screen.transferDetailsRoute(transferId))
+                                    }
+                                )
+                            }
+
+                            composable(Screen.Settings.route) {
+                                SettingsScreen(
+                                    viewModel = settingsViewModel,
+                                    onNavigateToTrustedDevices = {
+                                        navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
+                                    },
+                                    onNavigateToStorageManagement = {
+                                        navController.navigate(Screen.ROUTE_STORAGE_MANAGEMENT)
+                                    },
+                                    onNavigateToReceivedFiles = {
+                                        navController.navigate(Screen.ROUTE_RECEIVED_FILES)
+                                    },
+                                    onNavigateToDiagnostics = {
+                                        navController.navigate(Screen.ROUTE_NETWORK_DIAGNOSTICS)
+                                    },
+                                    onNavigateToPrivacyDashboard = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
+                                    },
+                                    onNavigateToPrivacyPolicy = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                                    },
+                                    onNavigateToAbout = {
+                                        navController.navigate(Screen.ROUTE_ABOUT)
+                                    },
+                                    onNavigateToOnboarding = {
+                                        navController.navigate(Screen.ROUTE_ONBOARDING)
+                                    }
+                                )
+                            }
+
+                            composable(Screen.ROUTE_ONBOARDING) {
+                                OnboardingScreen(
+                                    settingsViewModel = settingsViewModel,
+                                    onOpenPrivacyPolicy = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                                    },
+                                    onFinishOnboarding = { action ->
+                                        settingsViewModel.updateLastSeenReleaseVersion(BuildConfig.VERSION_NAME)
+                                        when (action) {
+                                            OnboardingNextAction.FIND_DEVICES -> {
+                                                navController.navigate(Screen.Devices.route) {
+                                                    popUpTo(Screen.Home.route) { inclusive = false }
+                                                    launchSingleTop = true
+                                                }
+                                            }
+                                            OnboardingNextAction.SEND_FILES -> {
+                                                navController.navigate(Screen.Home.route) {
+                                                    popUpTo(Screen.Home.route) { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                                widgetTargetPending = null
+                                                widgetFilePicker.launch(arrayOf("*/*"))
+                                            }
+                                            OnboardingNextAction.RECEIVE_FILES -> {
+                                                if (!homeViewModel.isReceivingActive.value) {
+                                                    homeViewModel.toggleReceiving()
+                                                }
+                                                navController.navigate(Screen.Home.route) {
+                                                    popUpTo(Screen.Home.route) { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                            }
+                                            OnboardingNextAction.HOME -> {
+                                                navController.navigate(Screen.Home.route) {
+                                                    popUpTo(Screen.Home.route) { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                            }
                                         }
                                     }
-                                    OnboardingNextAction.SEND_FILES -> {
-                                        navController.navigate(Screen.Home.route) {
-                                            popUpTo(Screen.Home.route) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                        widgetTargetPending = null
-                                        widgetFilePicker.launch(arrayOf("*/*"))
+                                )
+                            }
+
+                            composable(Screen.ROUTE_PRIVACY_POLICY) {
+                                PrivacyPolicyScreen(
+                                    onBack = { navController.popBackStack() },
+                                    onOpenPrivacyDashboard = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
                                     }
-                                    OnboardingNextAction.RECEIVE_FILES -> {
-                                        if (!homeViewModel.isReceivingActive.value) {
-                                            homeViewModel.toggleReceiving()
-                                        }
-                                        navController.navigate(Screen.Home.route) {
-                                            popUpTo(Screen.Home.route) { inclusive = true }
-                                            launchSingleTop = true
+                                )
+                            }
+
+                            composable(Screen.ROUTE_ABOUT) {
+                                AboutScreen(
+                                    onBack = { navController.popBackStack() },
+                                    onOpenPrivacyPolicy = {
+                                        navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
+                                    },
+                                    onReplayOnboarding = {
+                                        navController.navigate(Screen.ROUTE_ONBOARDING)
+                                    }
+                                )
+                            }
+
+                            composable(
+                                route = Screen.ROUTE_TRANSFER_DETAILS,
+                                arguments = listOf(navArgument("transferId") { type = NavType.StringType })
+                            ) { backStackEntry ->
+                                val transferId = backStackEntry.arguments?.getString("transferId").orEmpty()
+                                TransferDetailsScreen(
+                                    transferId = transferId,
+                                    viewModel = transfersViewModel,
+                                    onBack = { navController.popBackStack() },
+                                    onViewTrustedDevices = {
+                                        navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
+                                    }
+                                )
+                            }
+
+                            composable(Screen.ROUTE_TRUSTED_DEVICES) {
+                                com.example.presentation.devices.TrustedDevicesScreen(
+                                    viewModel = devicesViewModel,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
+
+                            composable(Screen.ROUTE_STORAGE_MANAGEMENT) {
+                                StorageManagementScreen(
+                                    viewModel = storageViewModel,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
+
+                            composable(Screen.ROUTE_RECEIVED_FILES) {
+                                ReceivedFilesScreen(
+                                    storageManager = app.container.storageManager,
+                                    onBack = { navController.popBackStack() },
+                                    onFileDeleted = { deletedPath ->
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            app.container.appDatabase.transferDao().clearFilePathForPath(deletedPath)
                                         }
                                     }
-                                    OnboardingNextAction.HOME -> {
-                                        navController.navigate(Screen.Home.route) {
-                                            popUpTo(Screen.Home.route) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                }
+                                )
                             }
-                        )
-                    }
 
-                    composable(Screen.ROUTE_PRIVACY_POLICY) {
-                        PrivacyPolicyScreen(
-                            onBack = { navController.popBackStack() },
-                            onOpenPrivacyDashboard = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_DASHBOARD)
+                            composable(Screen.ROUTE_NETWORK_DIAGNOSTICS) {
+                                NetworkDiagnosticsScreen(
+                                    viewModel = diagnosticsViewModel,
+                                    onBack = { navController.popBackStack() }
+                                )
                             }
-                        )
-                    }
 
-                    composable(Screen.ROUTE_ABOUT) {
-                        AboutScreen(
-                            onBack = { navController.popBackStack() },
-                            onOpenPrivacyPolicy = {
-                                navController.navigate(Screen.ROUTE_PRIVACY_POLICY)
-                            },
-                            onReplayOnboarding = {
-                                navController.navigate(Screen.ROUTE_ONBOARDING)
+                            composable(Screen.ROUTE_PRIVACY_DASHBOARD) {
+                                PrivacyDashboardScreen(
+                                    settingsRepository = app.container.settingsRepository,
+                                    pairedDeviceRepository = app.container.pairedDeviceRepository,
+                                    connectionManager = app.container.connectionManager,
+                                    transferManager = app.container.transferManager,
+                                    storageManager = app.container.storageManager,
+                                    nsdDiscoveryManager = app.container.nsdDiscoveryManager,
+                                    onBack = { navController.popBackStack() }
+                                )
                             }
-                        )
-                    }
-
-                    composable(
-                        route = Screen.ROUTE_TRANSFER_DETAILS,
-                        arguments = listOf(navArgument("transferId") { type = NavType.StringType })
-                    ) { backStackEntry ->
-                        val transferId = backStackEntry.arguments?.getString("transferId").orEmpty()
-                        TransferDetailsScreen(
-                            transferId = transferId,
-                            viewModel = transfersViewModel,
-                            onBack = { navController.popBackStack() },
-                            onViewTrustedDevices = {
-                                navController.navigate(Screen.ROUTE_TRUSTED_DEVICES)
-                            }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_TRUSTED_DEVICES) {
-                        com.example.presentation.devices.TrustedDevicesScreen(
-                            viewModel = devicesViewModel,
-                            onBack = { navController.popBackStack() }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_STORAGE_MANAGEMENT) {
-                        StorageManagementScreen(
-                            viewModel = storageViewModel,
-                            onBack = { navController.popBackStack() }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_RECEIVED_FILES) {
-                        ReceivedFilesScreen(
-                            storageManager = app.container.storageManager,
-                            onBack = { navController.popBackStack() },
-                            onFileDeleted = { deletedPath ->
-                                coroutineScope.launch(Dispatchers.IO) {
-                                    app.container.appDatabase.transferDao().clearFilePathForPath(deletedPath)
-                                }
-                            }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_NETWORK_DIAGNOSTICS) {
-                        NetworkDiagnosticsScreen(
-                            viewModel = diagnosticsViewModel,
-                            onBack = { navController.popBackStack() }
-                        )
-                    }
-
-                    composable(Screen.ROUTE_PRIVACY_DASHBOARD) {
-                        PrivacyDashboardScreen(
-                            settingsRepository = app.container.settingsRepository,
-                            pairedDeviceRepository = app.container.pairedDeviceRepository,
-                            connectionManager = app.container.connectionManager,
-                            transferManager = app.container.transferManager,
-                            storageManager = app.container.storageManager,
-                            nsdDiscoveryManager = app.container.nsdDiscoveryManager,
-                            onBack = { navController.popBackStack() }
-                        )
+                        }
                     }
                 }
             }
         }
+    }
+
+    activeConflictPrompt?.let { conflict ->
+        FileConflictDialog(
+            prompt = conflict,
+            onResolve = { decision ->
+                app.container.transferManager.resolveFileConflict(conflict.fileId, decision)
+            }
+        )
     }
 
     if (shouldShowWhatsNew) {

@@ -45,6 +45,7 @@ class SettingsDataStore(private val context: Context) {
         val MAX_CONCURRENT = intPreferencesKey("max_concurrent")
         val TRANSFER_BUFFER_SIZE_KB = intPreferencesKey("transfer_buffer_size_kb")
         val DUPLICATE_HANDLING = stringPreferencesKey("duplicate_handling")
+        val ASK_ON_CONFLICT_IN_UI = booleanPreferencesKey("ask_on_conflict_in_ui")
         val PRESERVE_NAMES = booleanPreferencesKey("preserve_names")
         val AUTO_OPEN_COMPLETED = booleanPreferencesKey("auto_open_completed")
         val MAX_FILE_SIZE_MB = longPreferencesKey("max_file_size_mb")
@@ -121,6 +122,7 @@ class SettingsDataStore(private val context: Context) {
             maxConcurrentTransfers = prefs[PreferencesKeys.MAX_CONCURRENT] ?: 2,
             transferBufferSizeKb = prefs[PreferencesKeys.TRANSFER_BUFFER_SIZE_KB] ?: 64,
             duplicateHandling = prefs[PreferencesKeys.DUPLICATE_HANDLING] ?: "rename",
+            askOnConflictInUi = prefs[PreferencesKeys.ASK_ON_CONFLICT_IN_UI] ?: true,
             preserveOriginalNames = prefs[PreferencesKeys.PRESERVE_NAMES] ?: true,
             autoOpenCompleted = prefs[PreferencesKeys.AUTO_OPEN_COMPLETED] ?: false,
             maxAcceptedFileSizeMb = prefs[PreferencesKeys.MAX_FILE_SIZE_MB] ?: 0L,
@@ -229,6 +231,10 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateDuplicateHandling(handling: String) {
         context.dataStore.edit { it[PreferencesKeys.DUPLICATE_HANDLING] = handling }
+    }
+
+    suspend fun updateAskOnConflictInUi(enabled: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.ASK_ON_CONFLICT_IN_UI] = enabled }
     }
 
     suspend fun updatePreserveOriginalNames(enabled: Boolean) {

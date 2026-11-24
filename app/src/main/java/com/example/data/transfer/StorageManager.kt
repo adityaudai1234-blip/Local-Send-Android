@@ -1,5 +1,6 @@
 package com.example.data.transfer
 
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -11,12 +12,16 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import com.example.data.security.SecurityValidator
 import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.ErrorCategory
+import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
 
 enum class ReceivedFileCategory(val label: String, val folderName: String) {
     ALL("All", ""),
@@ -38,6 +43,55 @@ data class ReceivedFileEntry(
     val relativeFolder: String,
     val mimeType: String
 )
+
+data class ResumeMetadata(
+    val fileId: String,
+    val senderId: String,
+    val fileName: String,
+    val fileSize: Long,
+    val bytesWritten: Long,
+    val prefixSha256: String,
+    val expectedTotalSha256: String? = null,
+    val relativePath: String? = null,
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    fun toJsonString(): String {
+        val obj = JSONObject()
+        obj.put("fileId", fileId)
+        obj.put("senderId", senderId)
+        obj.put("fileName", fileName)
+        obj.put("fileSize", fileSize)
+        obj.put("bytesWritten", bytesWritten)
+        obj.put("prefixSha256", prefixSha256)
+        if (expectedTotalSha256 != null) obj.put("expectedTotalSha256", expectedTotalSha256)
+        if (relativePath != null) obj.put("relativePath", relativePath)
+        obj.put("updatedAt", updatedAt)
+        return obj.toString()
+    }
+
+    companion object {
+        fun fromJsonString(raw: String): ResumeMetadata? {
+            return try {
+                val obj = JSONObject(raw)
+                val fileId = obj.optString("fileId", "")
+                if (fileId.isBlank()) return null
+                ResumeMetadata(
+                    fileId = fileId,
+                    senderId = obj.optString("senderId", ""),
+                    fileName = obj.optString("fileName", ""),
+                    fileSize = obj.optLong("fileSize", 0L),
+                    bytesWritten = obj.optLong("bytesWritten", 0L),
+                    prefixSha256 = obj.optString("prefixSha256", ""),
+                    expectedTotalSha256 = obj.optString("expectedTotalSha256", "").takeIf { it.isNotBlank() },
+                    relativePath = obj.optString("relativePath", "").takeIf { it.isNotBlank() },
+                    updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}
 
 class StorageManager(private val context: Context) {
 
@@ -71,9 +125,66 @@ class StorageManager(private val context: Context) {
 
     fun getDownloadDirectory(): File = downloadsDir
 
+    private fun safeIdForTemp(fileId: String): String =
+        fileId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+
     fun createTempFile(fileId: String): File {
-        val safeId = fileId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return File(tempDir, "incoming_$safeId.tmp")
+        return File(tempDir, "incoming_${safeIdForTemp(fileId)}.tmp")
+    }
+
+    fun getTempMetaFile(fileId: String): File {
+        return File(tempDir, "incoming_${safeIdForTemp(fileId)}.meta.json")
+    }
+
+    fun readResumeMetadata(fileId: String): ResumeMetadata? {
+        return try {
+            val metaFile = getTempMetaFile(fileId)
+            if (!metaFile.exists()) return null
+            ResumeMetadata.fromJsonString(metaFile.readText())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun writeResumeMetadata(metadata: ResumeMetadata) {
+        try {
+            val metaFile = getTempMetaFile(metadata.fileId)
+            metaFile.writeText(metadata.toJsonString())
+        } catch (_: Exception) {}
+    }
+
+    fun deleteTempAndMetadata(fileId: String) {
+        try {
+            createTempFile(fileId).delete()
+        } catch (_: Exception) {}
+        try {
+            getTempMetaFile(fileId).delete()
+        } catch (_: Exception) {}
+    }
+
+    fun computeFilePrefixSha256(file: File, byteCount: Long): String? {
+        if (!file.exists() || byteCount < 0L || file.length() < byteCount) return null
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            if (byteCount == 0L) {
+                return digest.digest().joinToString("") { "%02x".format(it) }
+            }
+            val buffer = ByteArray(64 * 1024)
+            var remaining = byteCount
+            FileInputStream(file).use { input ->
+                while (remaining > 0L) {
+                    val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                    val read = input.read(buffer, 0, toRead)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                    remaining -= read
+                }
+            }
+            if (remaining != 0L) return null
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     sealed interface DestinationResolution {
@@ -81,8 +192,34 @@ class StorageManager(private val context: Context) {
         data object Skipped : DestinationResolution
     }
 
+    fun peekExistingDestination(
+        fileName: String,
+        relativePath: String? = null,
+        organizeByType: Boolean = false,
+        mimeType: String? = null
+    ): File? {
+        val sanitizedName = FileMetadata.sanitizeFileName(fileName)
+        val baseDir = downloadsDir
+        val safeRel = FileMetadata.sanitizeRelativePath(relativePath)
+        val relParent = safeRel?.substringBeforeLast('/', "")?.takeIf { it.isNotBlank() }
+
+        val targetParent = when {
+            relParent != null -> File(baseDir, relParent)
+            organizeByType -> File(baseDir, categorizeFile(sanitizedName, mimeType).folderName)
+            else -> baseDir
+        }
+        if (!SecurityValidator.isCanonicalSubPath(targetParent, baseDir)) {
+            throw SecurityException("Invalid subfolder destination rejected")
+        }
+        val target = File(targetParent, sanitizedName)
+        if (!SecurityValidator.isCanonicalSubPath(target, baseDir)) {
+            throw SecurityException("Invalid destination path rejected")
+        }
+        return if (target.exists()) target else null
+    }
+
     /**
-     * Resolves duplicate filenames according to user preference ("rename", "overwrite", "skip"),
+     * Resolves duplicate filenames according to user preference ("rename", "keep_both", "overwrite", "skip"),
      * optionally preserving folder hierarchy via [relativePath] or auto-organizing into type subfolders.
      */
     fun resolveDestinationWithPolicy(
@@ -94,7 +231,6 @@ class StorageManager(private val context: Context) {
     ): DestinationResolution {
         val sanitizedName = FileMetadata.sanitizeFileName(fileName)
         val baseDir = downloadsDir
-        val canonicalBase = baseDir.canonicalPath
 
         val safeRel = FileMetadata.sanitizeRelativePath(relativePath)
         val relParent = safeRel?.substringBeforeLast('/', "")?.takeIf { it.isNotBlank() }
@@ -108,8 +244,7 @@ class StorageManager(private val context: Context) {
             else -> baseDir
         }
 
-        val canonicalParent = targetParent.canonicalPath
-        if (!canonicalParent.startsWith(canonicalBase)) {
+        if (!SecurityValidator.isCanonicalSubPath(targetParent, baseDir)) {
             throw SecurityException("Invalid subfolder destination rejected")
         }
         if (!targetParent.exists()) {
@@ -117,7 +252,7 @@ class StorageManager(private val context: Context) {
         }
 
         val target = File(targetParent, sanitizedName)
-        if (!target.canonicalPath.startsWith(canonicalBase)) {
+        if (!SecurityValidator.isCanonicalSubPath(target, baseDir)) {
             throw SecurityException("Invalid destination path rejected")
         }
 
@@ -126,10 +261,21 @@ class StorageManager(private val context: Context) {
         }
 
         return when (duplicateHandling.lowercase(Locale.ROOT)) {
-            "overwrite" -> DestinationResolution.Ready(target)
+            "overwrite", "replace" -> DestinationResolution.Ready(target)
             "skip" -> DestinationResolution.Skipped
+            "rename", "keep_both" -> DestinationResolution.Ready(resolveUniqueDestinationFileInDir(targetParent, sanitizedName))
             else -> DestinationResolution.Ready(resolveUniqueDestinationFileInDir(targetParent, sanitizedName))
         }
+    }
+
+    fun createDirectoryFromRelativePath(relativePath: String?): Boolean {
+        val safeRel = FileMetadata.sanitizeRelativePath(relativePath) ?: return false
+        val baseDir = downloadsDir
+        val targetDir = File(baseDir, safeRel)
+        if (!SecurityValidator.isCanonicalSubPath(targetDir, baseDir)) {
+            throw SecurityException("Invalid directory destination rejected")
+        }
+        return if (targetDir.exists()) targetDir.isDirectory else targetDir.mkdirs()
     }
 
     fun resolveUniqueDestinationFile(fileName: String): File {
@@ -155,8 +301,9 @@ class StorageManager(private val context: Context) {
     }
 
     /**
-     * Moves a verified temporary file to the final destination file,
-     * or writes into the user's SAF tree URI if configured.
+     * Moves a verified temporary file to the final destination file using safe staging
+     * so an existing destination is never deleted before replacement succeeds, or writes
+     * into the user's SAF tree URI if configured.
      */
     fun finalizeReceivedFile(
         tempFile: File,
@@ -194,16 +341,60 @@ class StorageManager(private val context: Context) {
             }
         }
 
+        val parentDir = destinationFile.parentFile ?: downloadsDir
+        if (!parentDir.exists()) parentDir.mkdirs()
+
+        // Fast path when destination does not yet exist
+        if (!destinationFile.exists()) {
+            return try {
+                val renamed = tempFile.renameTo(destinationFile)
+                if (!renamed) {
+                    val staged = File(parentDir, ".stage_${UUID.randomUUID()}_${destinationFile.name}")
+                    tempFile.copyTo(staged, overwrite = true)
+                    if (!staged.renameTo(destinationFile)) {
+                        staged.copyTo(destinationFile, overwrite = true)
+                        staged.delete()
+                    }
+                    tempFile.delete()
+                }
+                destinationFile.absolutePath
+            } catch (e: Exception) {
+                AppErrorReporter.reportThrowable(
+                    category = ErrorCategory.STORAGE,
+                    throwable = e,
+                    targetLabel = destinationFile.name
+                )
+                null
+            }
+        }
+
+        // Atomic replacement path: stage alongside destination first, swap backup, only then remove backup
+        val stagedFile = File(parentDir, ".stage_${UUID.randomUUID()}_${destinationFile.name}")
+        val backupFile = File(parentDir, ".bak_${UUID.randomUUID()}_${destinationFile.name}")
         return try {
-            destinationFile.parentFile?.let { if (!it.exists()) it.mkdirs() }
-            if (destinationFile.exists()) destinationFile.delete()
-            val renamed = tempFile.renameTo(destinationFile)
-            if (!renamed) {
-                tempFile.copyTo(destinationFile, overwrite = true)
+            val movedToStage = tempFile.renameTo(stagedFile)
+            if (!movedToStage) {
+                tempFile.copyTo(stagedFile, overwrite = true)
                 tempFile.delete()
+            }
+            if (!destinationFile.renameTo(backupFile)) {
+                stagedFile.copyTo(destinationFile, overwrite = true)
+                stagedFile.delete()
+            } else {
+                if (!stagedFile.renameTo(destinationFile)) {
+                    // Roll back backup if final rename fails
+                    backupFile.renameTo(destinationFile)
+                    stagedFile.delete()
+                    return null
+                }
+                backupFile.delete()
             }
             destinationFile.absolutePath
         } catch (e: Exception) {
+            if (!destinationFile.exists() && backupFile.exists()) {
+                backupFile.renameTo(destinationFile)
+            }
+            if (stagedFile.exists()) stagedFile.delete()
             AppErrorReporter.reportThrowable(
                 category = ErrorCategory.STORAGE,
                 throwable = e,
@@ -217,6 +408,20 @@ class StorageManager(private val context: Context) {
         try {
             tempFile?.delete()
         } catch (_: Exception) {}
+    }
+
+    fun cleanOrphanTempFiles(activeTransferIds: Set<String>): Int {
+        val protectedPrefixes = activeTransferIds.map { "incoming_${safeIdForTemp(it)}" }.toSet()
+        var count = 0
+        try {
+            tempDir.listFiles()?.forEach { file ->
+                val baseName = file.name.substringBeforeLast(".meta.json").substringBeforeLast(".tmp")
+                if (baseName !in protectedPrefixes && file.delete()) {
+                    count++
+                }
+            }
+        } catch (_: Exception) {}
+        return count
     }
 
     fun cleanStaleTempFiles(maxAgeMs: Long = 24L * 60L * 60L * 1000L): Int {
@@ -239,7 +444,11 @@ class StorageManager(private val context: Context) {
             folder.listFiles()?.forEach { entry ->
                 if (entry.isDirectory) {
                     collect(entry)
-                } else if (entry.isFile && !entry.name.endsWith(".tmp")) {
+                } else if (entry.isFile &&
+                    !entry.name.endsWith(".tmp") &&
+                    !entry.name.startsWith(".stage_") &&
+                    !entry.name.startsWith(".bak_")
+                ) {
                     collected.add(entry)
                 }
             }
@@ -319,7 +528,6 @@ class StorageManager(private val context: Context) {
                 outFile.absolutePath
             }
         } catch (_: Exception) {
-            // App-internal fallback if external gallery write is unavailable
             try {
                 val fallbackDir = File(downloadsDir, "QR").apply { if (!exists()) mkdirs() }
                 val fallbackFile = File(fallbackDir, fileName)
@@ -369,6 +577,93 @@ class StorageManager(private val context: Context) {
         } else {
             val file = File(pathOrUri)
             if (file.exists()) shareFile(file)
+        }
+    }
+
+    fun shareMultipleFiles(files: List<File>): Boolean {
+        val existing = files.filter { it.exists() && it.isFile }
+        if (existing.isEmpty()) return false
+        if (existing.size == 1) {
+            shareFile(existing.first())
+            return true
+        }
+        return try {
+            val uris = ArrayList<Uri>(existing.map { getFileUri(it) })
+            val commonMime = resolveCommonMimeType(existing.map { getMimeType(it) })
+            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = commonMime
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newUri(context.contentResolver, "Shared files", uris.first()).apply {
+                    for (i in 1 until uris.size) {
+                        addItem(ClipData.Item(uris[i]))
+                    }
+                }
+            }
+            val chooser = Intent.createChooser(intent, "Share ${existing.size} files").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun shareMultiplePaths(pathsOrUris: List<String>): Boolean {
+        val uris = ArrayList<Uri>()
+        val mimeTypes = mutableListOf<String>()
+        for (raw in pathsOrUris) {
+            try {
+                if (raw.startsWith("content://")) {
+                    val uri = Uri.parse(raw)
+                    uris.add(uri)
+                    mimeTypes.add(context.contentResolver.getType(uri) ?: "*/*")
+                } else {
+                    val file = File(raw)
+                    if (file.exists() && file.isFile) {
+                        uris.add(getFileUri(file))
+                        mimeTypes.add(getMimeType(file))
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        if (uris.isEmpty()) return false
+        if (uris.size == 1) {
+            val single = pathsOrUris.first()
+            shareFilePath(single, File(single).name)
+            return true
+        }
+        return try {
+            val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = resolveCommonMimeType(mimeTypes)
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newUri(context.contentResolver, "Shared files", uris.first()).apply {
+                    for (i in 1 until uris.size) {
+                        addItem(ClipData.Item(uris[i]))
+                    }
+                }
+            }
+            val chooser = Intent.createChooser(intent, "Share ${uris.size} files").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun resolveCommonMimeType(mimes: List<String>): String {
+        if (mimes.isEmpty()) return "*/*"
+        val distinct = mimes.distinct()
+        if (distinct.size == 1) return distinct.first()
+        val prefixes = distinct.map { it.substringBefore('/') }.distinct()
+        return if (prefixes.size == 1 && prefixes.first() != "*") {
+            "${prefixes.first()}/*"
+        } else {
+            "*/*"
         }
     }
 

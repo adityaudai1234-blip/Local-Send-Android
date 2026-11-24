@@ -38,7 +38,8 @@ data class AppSettings(
     val connectionTimeoutMs: Int = 15000,
     val maxConcurrentTransfers: Int = 2,
     val transferBufferSizeKb: Int = 64,
-    val duplicateHandling: String = "rename", // "rename", "overwrite", "skip"
+    val duplicateHandling: String = "rename", // "rename", "overwrite", "skip", "ask"
+    val askOnConflictInUi: Boolean = true,
     val preserveOriginalNames: Boolean = true,
     val autoOpenCompleted: Boolean = false,
     val maxAcceptedFileSizeMb: Long = 0L, // 0L = unlimited

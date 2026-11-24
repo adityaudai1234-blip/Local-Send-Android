@@ -7,6 +7,7 @@ import com.example.data.transfer.TransferManager
 import com.example.domain.model.TransferCategory
 import com.example.domain.model.TransferDirection
 import com.example.domain.model.TransferItem
+import com.example.domain.model.TransferPriority
 import com.example.domain.model.TransferStats
 import com.example.domain.model.TransferStatus
 import com.example.domain.repository.TransferRepository
@@ -154,6 +155,22 @@ class TransfersViewModel(
     fun retryTransfer(id: String) = transferRepository.retryTransfer(id)
     fun clearCompleted() = transferRepository.clearCompleted()
 
+    fun pauseAll() = transferRepository.pauseAll()
+    fun resumeAll() = transferRepository.resumeAll()
+    fun cancelAll() = transferRepository.cancelAll()
+    fun retryAllFailed() = transferRepository.retryAllFailed()
+    fun moveUp(id: String) = transferRepository.moveTransferUp(id)
+    fun moveDown(id: String) = transferRepository.moveTransferDown(id)
+
+    fun cyclePriority(item: TransferItem) {
+        val next = when (item.priority) {
+            TransferPriority.NORMAL -> TransferPriority.HIGH
+            TransferPriority.HIGH -> TransferPriority.LOW
+            TransferPriority.LOW -> TransferPriority.NORMAL
+        }
+        transferRepository.setTransferPriority(item.id, next)
+    }
+
     fun deleteHistoryEntry(id: String) {
         transferRepository.deleteHistoryEntry(id)
     }
@@ -177,6 +194,15 @@ class TransfersViewModel(
         val path = item.filePath
         if (!path.isNullOrBlank()) {
             storageManager.shareFilePath(path, item.fileName)
+        }
+    }
+
+    fun shareMultipleCompleted(items: List<TransferItem>): Boolean {
+        val paths = items.mapNotNull { it.filePath?.takeIf { p -> p.isNotBlank() } }
+        return if (paths.isNotEmpty()) {
+            storageManager.shareMultiplePaths(paths)
+        } else {
+            false
         }
     }
 }

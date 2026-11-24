@@ -2,6 +2,8 @@ package com.example.presentation.transfers
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,6 +46,7 @@ import com.example.presentation.components.TransferItemCard
 import com.example.presentation.history.TransferHistoryTab
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TransfersScreen(
     viewModel: TransfersViewModel,
@@ -132,39 +135,81 @@ fun TransfersScreen(
                         }
 
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = when (selectedCategory) {
-                                        TransferCategory.ACTIVE -> "Ongoing Local Transfers"
-                                        TransferCategory.COMPLETED -> "Completed Transfers"
-                                        TransferCategory.FAILED -> "Failed or Cancelled Transfers"
-                                    },
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                if (selectedCategory == TransferCategory.COMPLETED && stats.completedCount > 0) {
-                                    TextButton(
-                                        onClick = {
-                                            viewModel.clearCompleted()
-                                            scope.launch { snackbarHostState.showSnackbar("Cleared completed entries") }
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = when (selectedCategory) {
+                                            TransferCategory.ACTIVE -> "Ongoing Local Transfers"
+                                            TransferCategory.COMPLETED -> "Completed Transfers"
+                                            TransferCategory.FAILED -> "Failed or Cancelled Transfers"
                                         },
-                                        modifier = Modifier.testTag("clear_completed_button")
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+
+                                    if (selectedCategory == TransferCategory.COMPLETED && stats.completedCount > 0) {
+                                        TextButton(
+                                            onClick = {
+                                                viewModel.clearCompleted()
+                                                scope.launch { snackbarHostState.showSnackbar("Cleared completed entries") }
+                                            },
+                                            modifier = Modifier.testTag("clear_completed_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteSweep,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "Clear",
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (selectedCategory == TransferCategory.ACTIVE && transfers.isNotEmpty()) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.DeleteSweep,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = "Clear",
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
+                                        TextButton(
+                                            onClick = { viewModel.pauseAll() },
+                                            modifier = Modifier.testTag("queue_pause_all_button")
+                                        ) {
+                                            Text("Pause All", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        TextButton(
+                                            onClick = { viewModel.resumeAll() },
+                                            modifier = Modifier.testTag("queue_resume_all_button")
+                                        ) {
+                                            Text("Resume All", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        TextButton(
+                                            onClick = { viewModel.cancelAll() },
+                                            modifier = Modifier.testTag("queue_cancel_all_button")
+                                        ) {
+                                            Text(
+                                                "Cancel All",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                } else if (selectedCategory == TransferCategory.FAILED && stats.failedCount > 0) {
+                                    Row(modifier = Modifier.fillMaxWidth()) {
+                                        TextButton(
+                                            onClick = { viewModel.retryAllFailed() },
+                                            modifier = Modifier.testTag("queue_retry_failed_button")
+                                        ) {
+                                            Text("Retry All Failed", style = MaterialTheme.typography.labelSmall)
+                                        }
                                     }
                                 }
                             }
@@ -197,14 +242,17 @@ fun TransfersScreen(
                                         { viewModel.shareFile(item) }
                                     } else null,
                                     onPauseResume = {
-                                        if (item.speed.contains("Pause", ignoreCase = true)) {
+                                        if (item.isPaused || item.speed.contains("Pause", ignoreCase = true)) {
                                             viewModel.resumeTransfer(item.id)
                                         } else {
                                             viewModel.pauseTransfer(item.id)
                                         }
                                     },
                                     onCancel = { viewModel.cancelTransfer(item.id) },
-                                    onRetry = { viewModel.retryTransfer(item.id) }
+                                    onRetry = { viewModel.retryTransfer(item.id) },
+                                    onCyclePriority = { viewModel.cyclePriority(item) },
+                                    onMoveUp = { viewModel.moveUp(item.id) },
+                                    onMoveDown = { viewModel.moveDown(item.id) }
                                 )
                             }
                         }

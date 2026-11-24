@@ -174,3 +174,13 @@ Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
 ## 8. Tauri Desktop (Rust) Reference Compatibility
 
 Tauri desktop peers implementing `CHUNK_MAGIC = 0x4C534431`, `EOF_MAGIC = 0x4C53454F`, 4-byte BE length-prefixed UTF-8 JSON control envelopes, and `_lsend._tcp.` mDNS registration on port `53317` interoperate directly with Android v2. Tauri peers should populate `version: "v2"` when supporting TLS, include optional sanitized `relativePath` entries inside `FileMetadata` for folder transfers, respect the 512 KB max binary chunk length, and gracefully handle `version: "v1"` frames for backward compatibility.
+
+### Optional Phase 8 Backward-Compatible Extensions (v2+)
+
+* **Verified-Offset Resume Handshake**:
+  * A sender supporting verified resume sets `"supportsResume": true` and `"expectReady": true` on `TRANSFER_STARTED`.
+  * Legacy v1/v2 receivers that ignore unknown JSON fields simply proceed from byte offset `0`.
+  * Updated receivers inspect `.tmp` + sidecar `.meta.json`, compute a SHA-256 prefix hash up to `acceptedOffset`, and reply with `TRANSFER_READY` containing `acceptedOffset` and `prefixSha256`.
+  * Senders verify the local file prefix SHA-256 against `prefixSha256`; on mismatch or missing match, transmission cleanly falls back to offset `0`.
+* **Empty Folder Markers**:
+  * `FileMetadata.isDirectory: true` with `fileSize = 0` and sanitized `relativePath` instructs receiving peers to create empty subdirectories (`mkdirs()`) without allocating a file or expecting `CHUNK`/`EOF` frames.
