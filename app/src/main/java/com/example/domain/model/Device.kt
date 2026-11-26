@@ -20,7 +20,9 @@ data class Device(
     val isSelf: Boolean = false,
     val status: DeviceStatus = if (isOnline) DeviceStatus.ONLINE else DeviceStatus.OFFLINE,
     val serviceName: String = "",
-    val alternateAddresses: List<String> = emptyList()
+    val alternateAddresses: List<String> = emptyList(),
+    val tlsSupported: Boolean = false,
+    val certFingerprint: String? = null
 ) {
     val displaySubtitle: String
         get() = if (ipAddress.isNotBlank()) "$ipAddress:$port" else "mDNS Discovered"

@@ -4,10 +4,12 @@ import android.content.Context
 import com.example.data.db.AppDatabase
 import com.example.data.discovery.NsdDiscoveryManager
 import com.example.data.network.ConnectionManager
+import com.example.data.network.LocalTlsIdentity
 import com.example.data.network.NetworkClient
 import com.example.data.network.NetworkServer
 import com.example.data.network.TcpClient
 import com.example.data.network.TcpServer
+import com.example.data.network.TlsTransport
 import com.example.data.pairing.PairingManager
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.DeviceDiscoveryRepositoryImpl
@@ -30,6 +32,7 @@ interface AppContainer {
     val performanceMonitor: PerformanceMonitor
     val settingsDataStore: SettingsDataStore
     val settingsRepository: SettingsRepository
+    val localTlsIdentity: LocalTlsIdentity?
     val nsdDiscoveryManager: NsdDiscoveryManager
     val deviceDiscoveryRepository: DeviceDiscoveryRepository
     val transferRepository: TransferRepository
@@ -59,8 +62,16 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
         SettingsRepositoryImpl(settingsDataStore)
     }
 
+    override val localTlsIdentity: LocalTlsIdentity? by lazy {
+        TlsTransport.getOrCreateLocalTlsIdentity(context, "LocalDrop")
+    }
+
     override val nsdDiscoveryManager: NsdDiscoveryManager by lazy {
-        NsdDiscoveryManager(context, performanceMonitor)
+        NsdDiscoveryManager(
+            context = context,
+            performanceMonitor = performanceMonitor,
+            localCertFingerprintProvider = { localTlsIdentity?.certFingerprintSha256 }
+        )
     }
 
     override val deviceDiscoveryRepository: DeviceDiscoveryRepository by lazy {
@@ -80,7 +91,10 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val tcpServer: NetworkServer by lazy {
-        TcpServer(performanceMonitor)
+        TcpServer(
+            performanceMonitor = performanceMonitor,
+            localNodeIdProvider = { deviceId }
+        )
     }
 
     override val tcpClient: NetworkClient by lazy {
@@ -101,7 +115,8 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             myDeviceIdProvider = { deviceId },
             context = context,
             pairedDeviceRepository = pairedDeviceRepository,
-            performanceMonitor = performanceMonitor
+            performanceMonitor = performanceMonitor,
+            tlsPreferredProvider = { settingsRepository.settings.value.tlsPreferred }
         )
     }
 
@@ -141,11 +156,13 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
             securityKeyStore = securityKeyStore,
             connectionManager = connectionManager,
             myDeviceId = deviceId,
-            settingsProvider = { settingsRepository.settings.value }
+            settingsProvider = { settingsRepository.settings.value },
+            localCertFingerprintProvider = { localTlsIdentity?.certFingerprintSha256 }
         )
     }
 
     init {
+        (tcpServer as? TcpServer)?.configureTlsServerContext(localTlsIdentity?.sslContext)
         tcpServer.setStreamMessageHandler { message, socket, input ->
             val transferResponse = transferManager.handleProtocolMessage(message, socket, input)
             if (transferResponse != null) {

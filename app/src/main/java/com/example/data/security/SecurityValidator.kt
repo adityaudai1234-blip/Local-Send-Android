@@ -21,9 +21,11 @@ object SecurityValidator {
     private const val RATE_LIMIT_WINDOW_MS = 10_000L
     private const val MAX_FAILED_AUTH_ATTEMPTS = 5
     private const val AUTH_LOCKOUT_MS = 60_000L
+    private const val AUTH_CLOCK_SKEW_WINDOW_MS = 300_000L
 
     private val connectionTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
     private val failedAuthAttempts = ConcurrentHashMap<String, Pair<Int, Long>>()
+    private val seenAuthNonces = ConcurrentHashMap<String, Long>()
 
     fun sanitizeFileName(rawName: String): String {
         return FileMetadata.sanitizeFileName(rawName)
@@ -118,8 +120,39 @@ object SecurityValidator {
         }
     }
 
+    /**
+     * Validates that an incoming AUTHENTICATION_REQUEST falls within the allowed clock-skew
+     * window (+/- 5 minutes) and that its nonce (when provided) has not already been seen.
+     */
+    fun isAuthTimestampAndNonceValid(
+        peerId: String,
+        timestampMs: Long,
+        nonce: String?,
+        now: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (timestampMs <= 0L) return false
+        if (kotlin.math.abs(now - timestampMs) > AUTH_CLOCK_SKEW_WINDOW_MS) {
+            return false
+        }
+        val cleanNonce = nonce?.trim()?.takeIf { it.isNotEmpty() } ?: return true
+        val cutoff = now - AUTH_CLOCK_SKEW_WINDOW_MS
+        if (seenAuthNonces.size > 2048) {
+            seenAuthNonces.entries.removeIf { it.value < cutoff }
+        }
+        val key = "$peerId:$cleanNonce"
+        val prev = seenAuthNonces.putIfAbsent(key, now)
+        if (prev != null && prev >= cutoff) {
+            return false
+        }
+        if (prev != null) {
+            seenAuthNonces[key] = now
+        }
+        return true
+    }
+
     fun clearRateLimiters() {
         connectionTimestamps.clear()
         failedAuthAttempts.clear()
+        seenAuthNonces.clear()
     }
 }

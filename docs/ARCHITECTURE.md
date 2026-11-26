@@ -17,11 +17,11 @@ Presentation (Compose M3 Screens + ViewModels + Glance Widgets)
 Domain (Immutable Models + Repository Interfaces + AppError/Sanitizer)
         │
         ▼
-Data (NSD/mDNS + TCP/TLS Sockets + Room v4 + DataStore + Keystore + SAF)
+Data (NSD/mDNS + TCP/TLS Pinned Sockets + Room v6 + DataStore + Keystore + SAF)
 ```
 
 ### Startup & Splash Lifecycle
-1. `LocalDropApp.onCreate()` installs `LocalCrashReporter` (on-device uncaught exception snapshot recorder with secret redaction), builds `DefaultAppContainer`, cleans stale `.tmp` transfer files, and synchronizes settings observers (SAF URI, mDNS refresh interval, TCP listening port, mDNS-to-paired peer sync, Glance widgets).
+1. `LocalDropApp.onCreate()` installs `LocalCrashReporter` (on-device uncaught exception snapshot recorder with secret redaction), builds `DefaultAppContainer`, initializes the persistent local EC P-256 TLS identity, cleans stale `.tmp` transfer files, and synchronizes settings observers (SAF URI, mDNS refresh interval, TCP listening port, mDNS-to-paired peer sync, Glance widgets).
 2. `MainActivity.onCreate()` calls AndroidX `installSplashScreen()` with a bounded non-blocking condition (`!settingsRepository.isLoaded.value` capped at 1.5 s) so the splash screen adapts automatically to light/dark system themes without blocking startup.
 3. Unsolicited startup permission prompts are eliminated; `MainAppScaffold` launches `OnboardingScreen` on first run and coordinates Android Share Sheet, Glance Widget actions, and one-time What's New release notes.
 
@@ -29,20 +29,20 @@ Data (NSD/mDNS + TCP/TLS Sockets + Room v4 + DataStore + Keystore + SAF)
 
 ## 2. Networking & Protocol Layer
 
-- **mDNS Discovery (`NsdDiscoveryManager`)**: Registers and resolves `_lsend._tcp.` on Android `NsdManager`, filtering self-fingerprints, deduplicating endpoints, pruning stale peers, and holding `WifiManager.MulticastLock` only while actively scanning or advertising. Discovery automatically pauses in `ON_STOP` and resumes in `ON_START`.
-- **Transport (`TcpServer`, `TcpClient`, `TlsTransport`)**: Listens on port `53317` (user-configurable `1024..65535`). Inspects initial byte (`0x16` ClientHello vs length-prefixed JSON) to support both `v2` TLS streams and legacy `v1` local LAN framing.
-- **Connection Resilience (`ConnectionManager`)**: Tracks per-peer `ConnectionState`, runs 20 s heartbeats, registers `ConnectivityManager.NetworkCallback`, runs bounded 3-attempt exponential backoff reconnects, and feeds sanitized errors to `AppErrorReporter`.
-- **Transfer Engine (`TransferManager`, `FileStreamFraming`, `FileTransferService`)**: Coordinates slot-limited concurrent transfers (`1..5`), 60 s approval windows, `"LSD1"` binary chunks, incremental SHA-256 verification (`"LSEO"`), pause/resume/cancel signaling, foreground `dataSync` service notification, and Room history recording.
+- **mDNS Discovery (`NsdDiscoveryManager`)**: Registers and resolves `_lsend._tcp.` on Android `NsdManager`, advertising `tlsSupported` and `certFingerprint` TXT attributes, filtering self-fingerprints, deduplicating endpoints, pruning stale peers, and holding `WifiManager.MulticastLock` only while actively scanning or advertising. Discovery automatically pauses in `ON_STOP` and resumes in `ON_START`.
+- **Transport (`TcpServer`, `TcpClient`, `TlsTransport`)**: Listens on port `53317` (user-configurable `1024..65535`). Persists a self-signed EC P-256 `X.509` keypair in `filesDir/security/` (`TlsTransport.getOrCreateLocalTlsIdentity`), inspects initial client bytes (`0x16` ClientHello vs length-prefixed JSON) to upgrade `v2` TLS sockets seamlessly, and pins peer SHA-256 fingerprints on outgoing TLS upgrades (`TlsTransport.upgradeClientSocketToTls`) while preserving `v1` fallback when peers lack TLS.
+- **Connection Resilience (`ConnectionManager`)**: Tracks per-peer `ConnectionState`, runs 20 s nonce-protected heartbeats/auth checks over pinned TLS or LAN TCP, registers `ConnectivityManager.NetworkCallback`, runs bounded 3-attempt exponential backoff reconnects, and feeds sanitized errors to `AppErrorReporter`.
+- **Transfer Engine (`TransferManager`, `FileStreamFraming`, `FileTransferService`)**: Coordinates slot-limited concurrent transfers (`1..5`), 60 s approval windows, `"LSD1"` binary chunks, O(1) incremental `MessageDigest.clone()` SHA-256 checkpointing (`snapshotDigestHex` every 256 KB), `"LSEO"` verification + `v2` `expectCompletionAck` handshakes, real-time `etaSeconds` calculation, pause/resume/cancel signaling, foreground `dataSync` service notification, and Room history recording.
 
 ---
 
 ## 3. Storage & Persistence
 
-- **Room Database (`AppDatabase` v4)**:
-  - `transfers` table (`TransferEntity`): Stores filename, extension, MIME type, size, direction, status, speed metrics, duration, `relativePath`, SHA-256 checksum, peer details, and final disk path/URI. Supports non-destructive `MIGRATION_1_2`, `MIGRATION_2_3`, and `MIGRATION_3_4`.
-  - `paired_devices` table (`PairedDeviceEntity`): Stores trusted peers, AES-GCM encrypted auth tokens (`encryptedAuthToken`), favorites, usage counts, and per-peer `autoAccept` flags.
+- **Room Database (`AppDatabase` v6)**:
+  - `transfers` table (`TransferEntity`): Stores filename, extension, MIME type, size, direction, status, speed metrics, duration, `relativePath`, SHA-256 checksum, peer details, and final disk path/URI. Supports non-destructive `MIGRATION_1_2` through `MIGRATION_5_6`.
+  - `paired_devices` table (`PairedDeviceEntity`): Stores trusted peers, AES-GCM encrypted auth tokens (`encryptedAuthToken`), `certFingerprint`, `tlsSupported`, favorites, usage counts, and per-peer `autoAccept` flags.
 - **Preferences (`SettingsDataStore`)**: Persists user configuration across 7 organized Settings sections (`General`, `Discovery`, `Transfers`, `Notifications`, `Privacy & Security`, `Storage`, `About`) plus `hasCompletedOnboarding` and `lastSeenReleaseVersion`.
-- **File Storage (`StorageManager`)**: Writes incoming streams to app-private `cacheDir/transfer_temp/` first, validates SHA-256, checks `canonicalPath.startsWith(canonicalBase)`, and commits cleanly to `Downloads/LocalDrop` or a user-selected SAF tree URI.
+- **File Storage (`StorageManager`)**: Writes incoming streams to app-private `cacheDir/transfer_temp/` first, validates SHA-256, checks `canonicalPath.startsWith(canonicalBase)`, enforces cross-OS filename/path sanitization (`FileMetadata`) and case-insensitive sibling collision resolution (`findCaseInsensitiveMatch`), and commits cleanly to `Downloads/LocalDrop` or a user-selected SAF tree URI.
 
 ---
 

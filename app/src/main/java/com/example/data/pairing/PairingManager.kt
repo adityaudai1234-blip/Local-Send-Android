@@ -6,9 +6,11 @@ import com.example.data.network.ConnectionManager
 import com.example.data.network.ConnectionState
 import com.example.data.network.NetworkClient
 import com.example.data.network.NetworkServer
+import com.example.data.protocol.ProtocolConstants
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.protocol.ProtocolMessageType
 import com.example.data.security.SecurityKeyStore
+import com.example.data.security.SecurityValidator
 import com.example.domain.model.AppErrorMapper
 import com.example.domain.model.AppErrorReporter
 import com.example.domain.model.AppSettings
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class PairingSession(
     val sessionId: String,
@@ -53,7 +56,8 @@ class PairingManager(
     private val securityKeyStore: SecurityKeyStore,
     private val connectionManager: ConnectionManager,
     private val myDeviceId: String,
-    private val settingsProvider: () -> AppSettings
+    private val settingsProvider: () -> AppSettings,
+    private val localCertFingerprintProvider: () -> String? = { null }
 ) {
     companion object {
         private const val TAG = "PairingManager"
@@ -62,6 +66,7 @@ class PairingManager(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var countdownJob: Job? = null
+    private val consumedSessionIds = ConcurrentHashMap.newKeySet<String>()
 
     private val _activeSession = MutableStateFlow<PairingSession?>(null)
     val activeSession: StateFlow<PairingSession?> = _activeSession.asStateFlow()
@@ -84,8 +89,10 @@ class PairingManager(
             ProtocolMessageType.PAIRING_REQUEST -> handleIncomingPairingRequest(message)
             ProtocolMessageType.AUTHENTICATION_REQUEST -> handleIncomingAuthRequest(message)
             ProtocolMessageType.HEARTBEAT -> ProtocolMessage(
+                version = ProtocolConstants.negotiateProtocolVersion(message.version) ?: ProtocolConstants.VERSION_V1,
                 type = ProtocolMessageType.HEARTBEAT,
                 senderId = myDeviceId,
+                receiverId = message.senderId,
                 payload = mapOf("pong" to System.currentTimeMillis())
             )
             else -> null
@@ -97,13 +104,18 @@ class PairingManager(
 
         val sessionId = UUID.randomUUID().toString()
         val token = securityKeyStore.generateSecureToken(16)
+        val nonce = securityKeyStore.generateSecureToken(8)
         val expiresAt = System.currentTimeMillis() + SESSION_DURATION_MS
 
         val settings = settingsProvider()
         val ip = NetworkUtils.getLocalIpv4Address() ?: "127.0.0.1"
+        val certFp = localCertFingerprintProvider()?.takeIf { it.isNotBlank() }
+        val tlsSupported = settings.tlsPreferred && certFp != null
+        val version = settings.protocolVersion.takeIf { it in ProtocolConstants.SUPPORTED_VERSIONS }
+            ?: ProtocolConstants.PREFERRED_VERSION
 
         val payload = PairingPayload(
-            protocolVersion = "v1",
+            protocolVersion = version,
             sessionId = sessionId,
             pairingToken = token,
             deviceId = myDeviceId,
@@ -111,7 +123,10 @@ class PairingManager(
             platform = "android",
             ipAddress = ip,
             port = settings.port,
-            expiresAt = expiresAt
+            expiresAt = expiresAt,
+            tlsSupported = tlsSupported,
+            certFingerprint = certFp,
+            nonce = nonce
         )
 
         val session = PairingSession(
@@ -160,8 +175,8 @@ class PairingManager(
     }
 
     /**
-     * Called when our device scans a peer's QR code.
-     * We connect to the peer's TCP server and send a PAIRING_REQUEST.
+     * Called when our device scans a peer's QR code or pairing URI.
+     * We connect to the peer's TCP/TLS server and send a PAIRING_REQUEST.
      */
     suspend fun pairWithScannedDevice(payload: PairingPayload) {
         if (payload.isExpired) {
@@ -181,25 +196,43 @@ class PairingManager(
 
         val settings = settingsProvider()
         val myIp = NetworkUtils.getLocalIpv4Address() ?: "127.0.0.1"
+        val myCertFp = localCertFingerprintProvider()?.takeIf { it.isNotBlank() }
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(payload.protocolVersion)
+            ?: ProtocolConstants.VERSION_V1
+
+        val reqPayload = linkedMapOf<String, Any?>(
+            "sessionId" to payload.sessionId,
+            "token" to payload.pairingToken,
+            "deviceName" to settings.deviceName,
+            "platform" to "android",
+            "ipAddress" to myIp,
+            "port" to settings.port,
+            "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
+            "tlsSupported" to (settings.tlsPreferred && myCertFp != null)
+        )
+        if (myCertFp != null) {
+            reqPayload["certFingerprint"] = myCertFp
+        }
 
         val requestMessage = ProtocolMessage(
+            version = negotiatedVersion,
             type = ProtocolMessageType.PAIRING_REQUEST,
             senderId = myDeviceId,
             receiverId = payload.deviceId,
-            payload = mapOf(
-                "sessionId" to payload.sessionId,
-                "token" to payload.pairingToken,
-                "deviceName" to settings.deviceName,
-                "platform" to "android",
-                "ipAddress" to myIp,
-                "port" to settings.port,
-                "model" to "${Build.MANUFACTURER} ${Build.MODEL}"
-            )
+            payload = reqPayload
         )
 
         _pairingResult.value = PairingResult.InProgress("Authenticating with ${payload.deviceName}…")
 
-        val result = client.sendMessage(payload.ipAddress, payload.port, requestMessage, timeoutMs = 10_000)
+        val useTls = settings.tlsPreferred && payload.tlsSupported
+        val result = client.sendMessage(
+            host = payload.ipAddress,
+            port = payload.port,
+            message = requestMessage,
+            timeoutMs = 10_000,
+            useTls = useTls,
+            expectedCertFingerprint = payload.certFingerprint
+        )
 
         result.fold(
             onSuccess = { response ->
@@ -207,6 +240,9 @@ class PairingManager(
                     ProtocolMessageType.PAIRING_ACCEPTED -> {
                         val peerToken = response.payload["authToken"] as? String ?: payload.pairingToken
                         val peerModel = response.payload["model"] as? String
+                        val peerTlsSupported = (response.payload["tlsSupported"] as? Boolean) ?: payload.tlsSupported
+                        val peerCertFp = (response.payload["certFingerprint"] as? String)
+                            ?.takeIf { it.isNotBlank() } ?: payload.certFingerprint
 
                         val pairedDevice = PairedDevice(
                             id = payload.deviceId,
@@ -218,7 +254,9 @@ class PairingManager(
                             pairedAt = System.currentTimeMillis(),
                             lastConnectedAt = System.currentTimeMillis(),
                             model = peerModel,
-                            isConnected = true
+                            isConnected = true,
+                            certFingerprint = peerCertFp,
+                            tlsSupported = peerTlsSupported || peerCertFp != null
                         )
 
                         pairedDeviceRepository.savePairedDevice(pairedDevice, peerToken)
@@ -237,7 +275,8 @@ class PairingManager(
                         _pairingResult.value = PairingResult.Failure(reason)
                     }
                     else -> {
-                        val msg = "Unexpected response received while pairing with ${payload.deviceName}."
+                        val msg = (response.payload["message"] as? String)
+                            ?: "Unexpected response received while pairing with ${payload.deviceName}."
                         AppErrorReporter.report(
                             category = ErrorCategory.PROTOCOL,
                             userMessage = msg,
@@ -263,39 +302,79 @@ class PairingManager(
     }
 
     /**
-     * Handshake when another device scans our QR code and connects to our TCP server.
+     * Handshake when another device scans our QR code and connects to our TCP/TLS server.
+     * Single-use session enforcement prevents second-device replay within the TTL window.
      */
     private suspend fun handleIncomingPairingRequest(message: ProtocolMessage): ProtocolMessage {
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(message.version)
+            ?: ProtocolConstants.VERSION_V1
         val currentSession = _activeSession.value
-        if (currentSession == null || currentSession.remainingSeconds <= 0) {
-            return ProtocolMessage(
-                type = ProtocolMessageType.PAIRING_REJECTED,
-                senderId = myDeviceId,
-                receiverId = message.senderId,
-                payload = mapOf("reason" to "No active pairing session or QR code expired")
-            )
-        }
-
         val requestSessionId = message.payload["sessionId"] as? String
         val requestToken = message.payload["token"] as? String
 
-        if (!com.example.data.security.SecurityValidator.constantTimeEquals(requestSessionId, currentSession.sessionId) ||
-            !com.example.data.security.SecurityValidator.constantTimeEquals(requestToken, currentSession.token)
-        ) {
+        if (requestSessionId != null && requestSessionId in consumedSessionIds) {
             return ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.PAIRING_REJECTED,
                 senderId = myDeviceId,
                 receiverId = message.senderId,
-                payload = mapOf("reason" to "Invalid pairing credentials or token mismatch")
+                payload = mapOf(
+                    "code" to ProtocolConstants.ErrorCode.ERR_PAIRING_REPLAY,
+                    "reason" to "Pairing QR session was already used"
+                )
             )
         }
 
-        // Token is valid! Accept and store trusted peer
+        if (currentSession == null || currentSession.remainingSeconds <= 0) {
+            return ProtocolMessage(
+                version = negotiatedVersion,
+                type = ProtocolMessageType.PAIRING_REJECTED,
+                senderId = myDeviceId,
+                receiverId = message.senderId,
+                payload = mapOf(
+                    "code" to ProtocolConstants.ErrorCode.ERR_PAIRING_EXPIRED,
+                    "reason" to "No active pairing session or QR code expired"
+                )
+            )
+        }
+
+        if (!SecurityValidator.constantTimeEquals(requestSessionId, currentSession.sessionId) ||
+            !SecurityValidator.constantTimeEquals(requestToken, currentSession.token)
+        ) {
+            return ProtocolMessage(
+                version = negotiatedVersion,
+                type = ProtocolMessageType.PAIRING_REJECTED,
+                senderId = myDeviceId,
+                receiverId = message.senderId,
+                payload = mapOf(
+                    "code" to ProtocolConstants.ErrorCode.ERR_AUTH_FAILED,
+                    "reason" to "Invalid pairing credentials or token mismatch"
+                )
+            )
+        }
+
+        // Consume single-use session atomically to reject concurrent or subsequent replays
+        if (!consumedSessionIds.add(currentSession.sessionId)) {
+            return ProtocolMessage(
+                version = negotiatedVersion,
+                type = ProtocolMessageType.PAIRING_REJECTED,
+                senderId = myDeviceId,
+                receiverId = message.senderId,
+                payload = mapOf(
+                    "code" to ProtocolConstants.ErrorCode.ERR_PAIRING_REPLAY,
+                    "reason" to "Pairing QR session was already used"
+                )
+            )
+        }
+        countdownJob?.cancel()
+
         val peerAlias = message.payload["deviceName"] as? String ?: "Remote Peer"
         val peerPlatform = message.payload["platform"] as? String ?: "unknown"
         val peerIp = message.payload["ipAddress"] as? String ?: "127.0.0.1"
-        val peerPort = (message.payload["port"] as? Number)?.toInt() ?: 53317
+        val peerPort = (message.payload["port"] as? Number)?.toInt() ?: ProtocolConstants.DEFAULT_PORT
         val peerModel = message.payload["model"] as? String
+        val peerCertFp = (message.payload["certFingerprint"] as? String)?.takeIf { it.isNotBlank() }
+        val peerTlsSupported = (message.payload["tlsSupported"] as? Boolean) ?: (peerCertFp != null)
 
         // Generate mutual permanent authentication token
         val mutualAuthToken = securityKeyStore.generateSecureToken(24)
@@ -310,75 +389,106 @@ class PairingManager(
             pairedAt = System.currentTimeMillis(),
             lastConnectedAt = System.currentTimeMillis(),
             model = peerModel,
-            isConnected = true
+            isConnected = true,
+            certFingerprint = peerCertFp,
+            tlsSupported = peerTlsSupported
         )
 
         pairedDeviceRepository.savePairedDevice(newPairedDevice, mutualAuthToken)
         connectionManager.setConnectionState(newPairedDevice.id, ConnectionState.Connected)
 
         _activeSession.update {
-            it?.copy(status = "Successfully paired with $peerAlias!")
+            it?.copy(remainingSeconds = 0, status = "Successfully paired with $peerAlias!")
         }
         _pairingResult.value = PairingResult.Success(newPairedDevice)
 
         val settings = settingsProvider()
+        val myCertFp = localCertFingerprintProvider()?.takeIf { it.isNotBlank() }
+        val respPayload = linkedMapOf<String, Any?>(
+            "authToken" to mutualAuthToken,
+            "deviceName" to settings.deviceName,
+            "platform" to "android",
+            "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
+            "protocolVersion" to negotiatedVersion,
+            "tlsSupported" to (settings.tlsPreferred && myCertFp != null)
+        )
+        if (myCertFp != null) {
+            respPayload["certFingerprint"] = myCertFp
+        }
         return ProtocolMessage(
+            version = negotiatedVersion,
             type = ProtocolMessageType.PAIRING_ACCEPTED,
             senderId = myDeviceId,
             receiverId = message.senderId,
-            payload = mapOf(
-                "authToken" to mutualAuthToken,
-                "deviceName" to settings.deviceName,
-                "platform" to "android",
-                "model" to "${Build.MANUFACTURER} ${Build.MODEL}"
-            )
+            payload = respPayload
         )
     }
 
     private suspend fun handleIncomingAuthRequest(message: ProtocolMessage): ProtocolMessage {
         val deviceId = message.senderId
-        if (com.example.data.security.SecurityValidator.isPeerAuthLockedOut(deviceId)) {
-            return ProtocolMessage(
-                type = ProtocolMessageType.ERROR,
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(message.version)
+            ?: ProtocolConstants.VERSION_V1
+
+        if (SecurityValidator.isPeerAuthLockedOut(deviceId)) {
+            return ProtocolMessage.createError(
                 senderId = myDeviceId,
                 receiverId = deviceId,
-                payload = mapOf(
-                    "code" to "AUTH_LOCKED",
-                    "message" to "Too many failed authentication attempts. Try again later."
-                )
+                errorCode = ProtocolConstants.ErrorCode.ERR_AUTH_LOCKOUT,
+                errorMessage = "Too many failed authentication attempts. Try again later.",
+                version = negotiatedVersion
+            )
+        }
+
+        val reqTimestamp = (message.payload["timestamp"] as? Number)?.toLong() ?: message.timestamp
+        val reqNonce = message.payload["nonce"] as? String
+        if (!SecurityValidator.isAuthTimestampAndNonceValid(deviceId, reqTimestamp, reqNonce)) {
+            AppErrorReporter.report(
+                category = ErrorCategory.AUTHENTICATION,
+                userMessage = "Rejected stale or replayed authentication request.",
+                technicalDetails = "ERR_REPLAY_DETECTED for peerId=$deviceId",
+                targetLabel = deviceId
+            )
+            return ProtocolMessage.createError(
+                senderId = myDeviceId,
+                receiverId = deviceId,
+                errorCode = ProtocolConstants.ErrorCode.ERR_REPLAY_DETECTED,
+                errorMessage = "Authentication request timestamp or nonce was already used or expired.",
+                version = negotiatedVersion
             )
         }
 
         val providedToken = message.payload["token"] as? String
         val storedToken = pairedDeviceRepository.getAuthToken(deviceId)
         val isMatch = !storedToken.isNullOrBlank() &&
-            com.example.data.security.SecurityValidator.constantTimeEquals(storedToken, providedToken)
-        com.example.data.security.SecurityValidator.recordAuthResult(deviceId, isMatch)
+            SecurityValidator.constantTimeEquals(storedToken, providedToken)
+        SecurityValidator.recordAuthResult(deviceId, isMatch)
 
         return if (isMatch) {
             pairedDeviceRepository.updateLastConnected(deviceId)
             connectionManager.setConnectionState(deviceId, ConnectionState.Connected)
             ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.AUTHENTICATION_RESPONSE,
                 senderId = myDeviceId,
                 receiverId = deviceId,
-                payload = mapOf("status" to "authenticated")
+                payload = mapOf(
+                    "status" to "authenticated",
+                    "protocolVersion" to negotiatedVersion
+                )
             )
         } else {
             AppErrorReporter.report(
                 category = ErrorCategory.AUTHENTICATION,
                 userMessage = "Rejected authentication attempt from an unrecognized or reset peer.",
-                technicalDetails = "AUTH_FAILED for peerId=$deviceId",
+                technicalDetails = "ERR_AUTH_FAILED for peerId=$deviceId",
                 targetLabel = deviceId
             )
-            ProtocolMessage(
-                type = ProtocolMessageType.ERROR,
+            ProtocolMessage.createError(
                 senderId = myDeviceId,
                 receiverId = deviceId,
-                payload = mapOf(
-                    "code" to "AUTH_FAILED",
-                    "message" to "Invalid or unknown authentication token"
-                )
+                errorCode = ProtocolConstants.ErrorCode.ERR_AUTH_FAILED,
+                errorMessage = "Invalid or unknown authentication token",
+                version = negotiatedVersion
             )
         }
     }

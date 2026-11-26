@@ -39,7 +39,9 @@ class PairedDeviceRepositoryImpl(
             isFavorite = existing?.isFavorite ?: device.isFavorite,
             useCount = existing?.useCount ?: device.useCount,
             lastTransferredAt = existing?.lastTransferredAt ?: device.lastTransferredAt,
-            autoAccept = existing?.autoAccept ?: device.autoAccept
+            autoAccept = existing?.autoAccept ?: device.autoAccept,
+            certFingerprint = device.certFingerprint ?: existing?.certFingerprint,
+            tlsSupported = device.tlsSupported || (existing?.tlsSupported == true)
         )
         dao.insertOrUpdate(entity)
     }
@@ -80,6 +82,10 @@ class PairedDeviceRepositoryImpl(
         dao.updateNetworkEndpoint(id, ipAddress, port, System.currentTimeMillis())
     }
 
+    override suspend fun updateTlsInfo(id: String, certFingerprint: String?, tlsSupported: Boolean) {
+        dao.updateTlsInfo(id, certFingerprint, tlsSupported)
+    }
+
     override suspend fun clearAllDevices() {
         dao.deleteAll()
         securityKeyStore.clearAllKeys()
@@ -98,6 +104,8 @@ class PairedDeviceRepositoryImpl(
         isFavorite = isFavorite,
         useCount = useCount,
         lastTransferredAt = lastTransferredAt,
-        autoAccept = autoAccept
+        autoAccept = autoAccept,
+        certFingerprint = certFingerprint,
+        tlsSupported = tlsSupported
     )
 }

@@ -1,0 +1,77 @@
+{
+  "qrPayloadV2": {
+    "protocolVersion": "v2",
+    "sessionId": "550e8400-e29b-41d4-a716-446655440011",
+    "pairingToken": "QrSessionSecretToken123456",
+    "deviceId": "tauri-win-node-01",
+    "deviceName": "Studio PC",
+    "platform": "windows",
+    "ipAddress": "192.168.1.42",
+    "port": 53317,
+    "expiresAt": 4102444800000,
+    "tlsSupported": true,
+    "certFingerprint": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+    "nonce": "n-847291"
+  },
+  "pairingUriV2": "localdrop://pair?v=v2&sid=550e8400-e29b-41d4-a716-446655440011&tok=QrSessionSecretToken123456&did=tauri-win-node-01&name=Studio+PC&plat=windows&ip=192.168.1.42&port=53317&exp=4102444800000&tls=1&fp=9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+  "pairingRequest": {
+    "version": "v2",
+    "type": "PAIRING_REQUEST",
+    "messageId": "msg-pair-req-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-win-node-01",
+    "timestamp": 1731000000000,
+    "payload": {
+      "sessionId": "550e8400-e29b-41d4-a716-446655440011",
+      "token": "QrSessionSecretToken123456",
+      "deviceName": "Pixel 9 Pro",
+      "platform": "android",
+      "ipAddress": "192.168.1.77",
+      "port": 53317,
+      "model": "Google Pixel 9 Pro",
+      "tlsSupported": true,
+      "certFingerprint": "4e1c9d0b2f7a8e315c6d4a2b8f091234567890abcdef1234567890abcdef1234"
+    }
+  },
+  "pairingAccepted": {
+    "version": "v2",
+    "type": "PAIRING_ACCEPTED",
+    "messageId": "msg-pair-acc-1",
+    "senderId": "tauri-win-node-01",
+    "receiverId": "android-pixel9-node",
+    "timestamp": 1731000001000,
+    "payload": {
+      "authToken": "MutualPermanentTokenXYZ987654321",
+      "deviceName": "Studio PC",
+      "platform": "windows",
+      "model": "Windows 11 Pro",
+      "tlsSupported": true,
+      "certFingerprint": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+    }
+  },
+  "authenticationRequest": {
+    "version": "v2",
+    "type": "AUTHENTICATION_REQUEST",
+    "messageId": "msg-auth-req-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-win-node-01",
+    "timestamp": 1731000005000,
+    "payload": {
+      "token": "MutualPermanentTokenXYZ987654321",
+      "timestamp": 1731000005000,
+      "nonce": "auth-nonce-001"
+    }
+  },
+  "authenticationResponse": {
+    "version": "v2",
+    "type": "AUTHENTICATION_RESPONSE",
+    "messageId": "msg-auth-res-1",
+    "senderId": "tauri-win-node-01",
+    "receiverId": "android-pixel9-node",
+    "timestamp": 1731000005050,
+    "payload": {
+      "status": "authenticated",
+      "protocolVersion": "v2"
+    }
+  }
+}

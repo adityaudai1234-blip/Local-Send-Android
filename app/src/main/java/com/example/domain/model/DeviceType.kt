@@ -17,6 +17,16 @@ enum class DeviceType(val displayName: String, val identifier: String) {
     WEB("Web", "web"),
     UNKNOWN("Unknown", "unknown");
 
+    val friendlyPlatformName: String
+        get() = when (this) {
+            ANDROID -> "Android Phone"
+            WINDOWS -> "Windows Desktop"
+            MACOS -> "macOS Computer"
+            LINUX -> "Linux Workstation"
+            WEB -> "Web Browser"
+            UNKNOWN -> "Unknown Device"
+        }
+
     val icon: ImageVector
         get() = when (this) {
             ANDROID -> Icons.Default.PhoneAndroid

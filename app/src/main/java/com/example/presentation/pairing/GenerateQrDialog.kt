@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
@@ -252,7 +253,7 @@ fun GenerateQrDialog(
                         onClick = {
                             val p = session?.payload
                             if (p != null) {
-                                val nonSecretInfo = "LocalDrop Device: ${p.deviceName}\nEndpoint: ${p.ipAddress}:${p.port}\nProtocol: ${p.protocolVersion}\nSession ID: ${p.sessionId}"
+                                val nonSecretInfo = "LocalDrop Device: ${p.deviceName}\nEndpoint: ${p.ipAddress}:${p.port}\nProtocol: ${p.protocolVersion}\nTLS Pinning: ${p.tlsSupported}\nSession ID: ${p.sessionId}"
                                 clipboard.setText(AnnotatedString(nonSecretInfo))
                                 feedbackBanner = "Connection endpoint copied"
                             }
@@ -265,6 +266,23 @@ fun GenerateQrDialog(
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Copy Info", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(
+                        onClick = {
+                            val p = session?.payload
+                            if (p != null) {
+                                clipboard.setText(AnnotatedString(p.toPairingUri()))
+                                feedbackBanner = "Pairing link copied for desktop peer"
+                            }
+                        },
+                        enabled = session != null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("copy_qr_link_button")
+                    ) {
+                        Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Link", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 

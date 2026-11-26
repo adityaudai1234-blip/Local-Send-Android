@@ -215,12 +215,13 @@ class StorageManager(private val context: Context) {
         if (!SecurityValidator.isCanonicalSubPath(target, baseDir)) {
             throw SecurityException("Invalid destination path rejected")
         }
-        return if (target.exists()) target else null
+        return if (target.exists()) target else findCaseInsensitiveMatch(targetParent, sanitizedName)
     }
 
     /**
      * Resolves duplicate filenames according to user preference ("rename", "keep_both", "overwrite", "skip"),
-     * optionally preserving folder hierarchy via [relativePath] or auto-organizing into type subfolders.
+     * optionally preserving folder hierarchy via [relativePath] or auto-organizing into type subfolders,
+     * including cross-OS case-insensitive sibling collision detection for Windows/macOS parity.
      */
     fun resolveDestinationWithPolicy(
         fileName: String,
@@ -256,12 +257,20 @@ class StorageManager(private val context: Context) {
             throw SecurityException("Invalid destination path rejected")
         }
 
-        if (!target.exists()) {
+        val existingConflict = if (target.exists()) target else findCaseInsensitiveMatch(targetParent, sanitizedName)
+        if (existingConflict == null) {
             return DestinationResolution.Ready(target)
         }
 
         return when (duplicateHandling.lowercase(Locale.ROOT)) {
-            "overwrite", "replace" -> DestinationResolution.Ready(target)
+            "overwrite", "replace" -> {
+                if (existingConflict.name != sanitizedName) {
+                    try {
+                        existingConflict.delete()
+                    } catch (_: Exception) {}
+                }
+                DestinationResolution.Ready(target)
+            }
             "skip" -> DestinationResolution.Skipped
             "rename", "keep_both" -> DestinationResolution.Ready(resolveUniqueDestinationFileInDir(targetParent, sanitizedName))
             else -> DestinationResolution.Ready(resolveUniqueDestinationFileInDir(targetParent, sanitizedName))
@@ -285,7 +294,7 @@ class StorageManager(private val context: Context) {
 
     private fun resolveUniqueDestinationFileInDir(parentDir: File, sanitizedFileName: String): File {
         val target = File(parentDir, sanitizedFileName)
-        if (!target.exists()) return target
+        if (!target.exists() && findCaseInsensitiveMatch(parentDir, sanitizedFileName) == null) return target
 
         val nameWithoutExt = sanitizedFileName.substringBeforeLast('.')
         val ext = if (sanitizedFileName.contains('.')) ".${sanitizedFileName.substringAfterLast('.')}" else ""
@@ -293,11 +302,23 @@ class StorageManager(private val context: Context) {
         var counter = 1
         var candidate: File
         do {
-            candidate = File(parentDir, "$nameWithoutExt ($counter)$ext")
+            val candidateName = "$nameWithoutExt ($counter)$ext"
+            candidate = File(parentDir, candidateName)
             counter++
-        } while (candidate.exists() && counter < 1000)
+        } while ((candidate.exists() || findCaseInsensitiveMatch(parentDir, candidate.name) != null) && counter < 1000)
 
         return candidate
+    }
+
+    private fun findCaseInsensitiveMatch(parentDir: File, fileName: String): File? {
+        if (!parentDir.exists() || !parentDir.isDirectory) return null
+        return try {
+            parentDir.listFiles()?.firstOrNull { entry ->
+                entry.name.equals(fileName, ignoreCase = true)
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

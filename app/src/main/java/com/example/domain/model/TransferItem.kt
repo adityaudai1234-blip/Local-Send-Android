@@ -68,7 +68,8 @@ data class TransferItem(
     val retryCount: Int = 0,
     val isDirectory: Boolean = false,
     val partialChecksum: String? = null,
-    val sourceUri: String? = null
+    val sourceUri: String? = null,
+    val etaSeconds: Long? = null
 ) {
     val category: TransferCategory
         get() = when (status) {
@@ -79,6 +80,15 @@ data class TransferItem(
 
     val formattedSize: String
         get() = formatBytes(fileSize)
+
+    val formattedEta: String?
+        get() {
+            val sec = etaSeconds ?: return null
+            if (sec <= 0L) return null
+            val minutes = sec / 60L
+            val remSec = sec % 60L
+            return if (minutes > 0L) "~${minutes}m ${remSec}s left" else "~${remSec}s left"
+        }
 
     val formattedDuration: String
         get() {

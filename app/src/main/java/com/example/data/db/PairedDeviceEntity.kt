@@ -1,5 +1,6 @@
 package com.example.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -19,5 +20,8 @@ data class PairedDeviceEntity(
     val isFavorite: Boolean = false,
     val useCount: Int = 0,
     val lastTransferredAt: Long = 0L,
-    val autoAccept: Boolean = false
+    val autoAccept: Boolean = false,
+    val certFingerprint: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val tlsSupported: Boolean = false
 )

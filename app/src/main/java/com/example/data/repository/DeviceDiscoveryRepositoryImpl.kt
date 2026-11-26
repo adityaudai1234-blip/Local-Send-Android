@@ -77,7 +77,7 @@ class DeviceDiscoveryRepositoryImpl(
                 ipAddress = "192.168.1.142",
                 port = 53317,
                 model = "Windows 11 (Tauri 2.0)",
-                protocolVersion = "v1"
+                protocolVersion = "v2"
             ),
             Device(
                 id = "tauri-macbook-${UUID.randomUUID().toString().take(4)}",
@@ -86,7 +86,7 @@ class DeviceDiscoveryRepositoryImpl(
                 ipAddress = "192.168.1.189",
                 port = 53317,
                 model = "macOS Sonoma (Tauri)",
-                protocolVersion = "v1"
+                protocolVersion = "v2"
             ),
             Device(
                 id = "linux-workstation-${UUID.randomUUID().toString().take(4)}",
@@ -95,7 +95,7 @@ class DeviceDiscoveryRepositoryImpl(
                 ipAddress = "192.168.1.105",
                 port = 53317,
                 model = "Ubuntu 24.04 LTS",
-                protocolVersion = "v1"
+                protocolVersion = "v2"
             )
         )
         testPeers.forEach { nsdManager.addSimulatedPeer(it) }

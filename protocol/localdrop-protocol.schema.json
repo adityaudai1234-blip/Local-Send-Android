@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localdrop.local/schemas/localdrop-protocol.schema.json",
+  "title": "LocalDrop Cross-Platform Communication Protocol Schema (v1 & v2)",
+  "description": "Shared wire protocol contract for LocalDrop Android and companion Tauri desktop applications (Windows, macOS, Linux).",
+  "type": "object",
+  "$defs": {
+    "ProtocolVersion": {
+      "type": "string",
+      "enum": ["v1", "v2"]
+    },
+    "PlatformType": {
+      "type": "string",
+      "enum": ["android", "windows", "macos", "linux", "web", "unknown"]
+    },
+    "MessageType": {
+      "type": "string",
+      "enum": [
+        "DISCOVERY",
+        "PAIRING_REQUEST",
+        "PAIRING_RESPONSE",
+        "PAIRING_ACCEPTED",
+        "PAIRING_REJECTED",
+        "AUTHENTICATION_REQUEST",
+        "AUTHENTICATION_RESPONSE",
+        "CONNECTION_ESTABLISHED",
+        "CONNECTION_CLOSED",
+        "HEARTBEAT",
+        "TRANSFER_REQUEST",
+        "TRANSFER_ACCEPTED",
+        "TRANSFER_REJECTED",
+        "TRANSFER_METADATA",
+        "TRANSFER_READY",
+        "TRANSFER_STARTED",
+        "TRANSFER_PROGRESS",
+        "TRANSFER_PAUSED",
+        "TRANSFER_RESUMED",
+        "TRANSFER_COMPLETED",
+        "TRANSFER_CANCELLED",
+        "TRANSFER_FAILED",
+        "FILE_CONFLICT",
+        "ERROR"
+      ]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "ERR_INVALID_FRAME",
+        "ERR_UNSUPPORTED_VERSION",
+        "ERR_RATE_LIMITED",
+        "ERR_AUTH_LOCKOUT",
+        "ERR_AUTH_FAILED",
+        "ERR_TOKEN_EXPIRED",
+        "ERR_PAIRING_EXPIRED",
+        "ERR_PAIRING_REPLAY",
+        "ERR_REPLAY_DETECTED",
+        "ERR_FILE_TOO_LARGE",
+        "ERR_INSUFFICIENT_SPACE",
+        "ERR_CHECKSUM_MISMATCH",
+        "ERR_PATH_UNSAFE",
+        "ERR_FILE_CONFLICT",
+        "ERR_TRANSFER_REJECTED",
+        "ERR_TRANSFER_FAILED",
+        "ERR_INTERNAL"
+      ]
+    },
+    "ConflictPolicy": {
+      "type": "string",
+      "enum": ["rename", "keep_both", "overwrite", "replace", "skip", "ask"]
+    },
+    "TransferLifecycleState": {
+      "type": "string",
+      "enum": ["PENDING", "ACTIVE", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+    },
+    "ProtocolEnvelope": {
+      "type": "object",
+      "required": ["version", "type", "messageId", "senderId", "timestamp", "payload"],
+      "properties": {
+        "version": { "$ref": "#/$defs/ProtocolVersion" },
+        "type": { "$ref": "#/$defs/MessageType" },
+        "messageId": { "type": "string", "minLength": 1 },
+        "senderId": { "type": "string", "minLength": 1 },
+        "receiverId": { "type": "string" },
+        "timestamp": { "type": "integer", "minimum": 0 },
+        "payload": { "type": "object" }
+      }
+    },
+    "DiscoveryTxtRecord": {
+      "type": "object",
+      "required": ["alias", "deviceType", "protocol", "version", "fingerprint", "port"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "deviceType": { "$ref": "#/$defs/PlatformType" },
+        "protocol": { "$ref": "#/$defs/ProtocolVersion" },
+        "version": { "type": "string", "minLength": 1 },
+        "deviceModel": { "type": "string" },
+        "fingerprint": { "type": "string", "minLength": 1 },
+        "port": { "type": "string", "pattern": "^[0-9]{4,5}$" },
+        "tlsSupported": { "type": "string", "enum": ["true", "false"] },
+        "certFingerprint": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "supportsResume": { "type": "string", "enum": ["true", "false"] }
+      }
+    },
+    "PairingQrPayload": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "sessionId",
+        "pairingToken",
+        "deviceId",
+        "deviceName",
+        "platform",
+        "ipAddress",
+        "port",
+        "expiresAt"
+      ],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "pairingToken": { "type": "string", "minLength": 8 },
+        "deviceId": { "type": "string", "minLength": 1 },
+        "deviceName": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "#/$defs/PlatformType" },
+        "ipAddress": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+        "expiresAt": { "type": "integer", "minimum": 1 },
+        "tlsSupported": { "type": "boolean" },
+        "certFingerprint": { "type": "string" },
+        "nonce": { "type": "string" }
+      }
+    },
+    "FileMetadataItem": {
+      "type": "object",
+      "required": ["fileId", "fileName", "fileSize", "mimeType"],
+      "properties": {
+        "fileId": { "type": "string", "minLength": 1 },
+        "fileName": { "type": "string", "minLength": 1 },
+        "fileSize": { "type": "integer", "minimum": 0 },
+        "mimeType": { "type": "string", "minLength": 1 },
+        "checksum": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "relativePath": { "type": ["string", "null"] },
+        "isDirectory": { "type": "boolean" }
+      }
+    },
+    "TransferRequestPayload": {
+      "type": "object",
+      "required": ["sessionId", "senderName", "files"],
+      "properties": {
+        "sessionId": { "type": "string", "minLength": 1 },
+        "senderName": { "type": "string", "minLength": 1 },
+        "senderPlatform": { "$ref": "#/$defs/PlatformType" },
+        "senderType": { "$ref": "#/$defs/PlatformType" },
+        "senderIp": { "type": "string" },
+        "senderPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+        "totalSize": { "type": "integer", "minimum": 0 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "fileCount": { "type": "integer", "minimum": 1 },
+        "supportsResume": { "type": "boolean" },
+        "tlsPreferred": { "type": "boolean" },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/FileMetadataItem" }
+        }
+      }
+    },
+    "ErrorPayload": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": { "type": "string", "minLength": 1 },
+        "supportedVersions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProtocolVersion" }
+        },
+        "details": { "type": "string" }
+      }
+    }
+  },
+  "x-framing": {
+    "controlFrame": {
+      "headerBytes": 4,
+      "endianness": "BIG_ENDIAN",
+      "encoding": "UTF-8",
+      "maxFrameBytes": 2097152,
+      "tlsRecordFirstByteHex": "0x16"
+    },
+    "binaryStreamFrame": {
+      "chunkMagicHex": "0x4C534431",
+      "chunkMagicAscii": "LSD1",
+      "eofMagicHex": "0x4C53454F",
+      "eofMagicAscii": "LSEO",
+      "defaultChunkBytes": 65536,
+      "maxChunkBytes": 524288,
+      "chunkHeaderFormat": "UInt32BE(magic) + UInt32BE(fileIndex) + UInt64BE(offset) + UInt32BE(length) + Bytes(length)",
+      "eofFrameFormat": "UInt32BE(magic) + UInt32BE(fileIndex) + Bytes32(sha256)"
+    }
+  }
+}

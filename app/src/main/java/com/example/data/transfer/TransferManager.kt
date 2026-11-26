@@ -8,7 +8,9 @@ import com.example.data.db.TransferEntity
 import com.example.data.network.ConnectionManager
 import com.example.data.network.NetworkClient
 import com.example.data.network.NetworkServer
+import com.example.data.network.TlsTransport
 import com.example.data.protocol.MessageFraming
+import com.example.data.protocol.ProtocolConstants
 import com.example.data.protocol.ProtocolMessage
 import com.example.data.protocol.ProtocolMessageType
 import com.example.data.security.SecurityValidator
@@ -467,6 +469,9 @@ class TransferManager(
         val isDirectory = payload["isDirectory"] as? Boolean == true
         val supportsResume = payload["supportsResume"] as? Boolean == true
         val expectReady = payload["expectReady"] as? Boolean == true
+        val expectCompletionAck = payload["expectCompletionAck"] as? Boolean == true
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(message.version)
+            ?: ProtocolConstants.VERSION_V1
 
         val metadata = FileMetadata(
             fileId = fileId,
@@ -501,8 +506,46 @@ class TransferManager(
                     relativePath = relativePath,
                     isDirectory = true
                 )
+                if (expectCompletionAck && !socket.isClosed) {
+                    val out = BufferedOutputStream(socket.getOutputStream())
+                    MessageFraming.writeFrame(
+                        out,
+                        ProtocolMessage(
+                            version = negotiatedVersion,
+                            type = ProtocolMessageType.TRANSFER_COMPLETED,
+                            senderId = myDeviceIdProvider(),
+                            receiverId = message.senderId,
+                            payload = mapOf(
+                                "sessionId" to sessionId,
+                                "fileId" to fileId,
+                                "bytesVerified" to 0L,
+                                "isDirectory" to true
+                            )
+                        )
+                    )
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed creating directory marker $relativePath", e)
+                if (expectCompletionAck && !socket.isClosed) {
+                    try {
+                        val out = BufferedOutputStream(socket.getOutputStream())
+                        MessageFraming.writeFrame(
+                            out,
+                            ProtocolMessage(
+                                version = negotiatedVersion,
+                                type = ProtocolMessageType.TRANSFER_FAILED,
+                                senderId = myDeviceIdProvider(),
+                                receiverId = message.senderId,
+                                payload = mapOf(
+                                    "sessionId" to sessionId,
+                                    "fileId" to fileId,
+                                    "code" to ProtocolConstants.ErrorCode.ERR_PATH_UNSAFE,
+                                    "reason" to (e.message ?: "Failed to create directory")
+                                )
+                            )
+                        )
+                    } catch (_: Exception) {}
+                }
             }
             return
         }
@@ -514,7 +557,9 @@ class TransferManager(
             sessionId = sessionId,
             existingInputStream = input,
             senderId = message.senderId,
-            negotiateResumeReady = supportsResume && expectReady
+            negotiateResumeReady = supportsResume && expectReady,
+            expectCompletionAck = expectCompletionAck,
+            negotiatedVersion = negotiatedVersion
         )
     }
 
@@ -600,7 +645,15 @@ class TransferManager(
         initialItems.forEach { persistActiveStateEntity(it, sessionId) }
         recalculateStats()
 
+        val pairedPeer = try { pairedDeviceRepository.getPairedDevice(target.id) } catch (_: Exception) { null }
+        val useTls = settings.tlsPreferred && (target.tlsSupported || pairedPeer?.tlsSupported == true)
+        val expectedFingerprint = target.certFingerprint?.takeIf { it.isNotBlank() }
+            ?: pairedPeer?.certFingerprint?.takeIf { it.isNotBlank() }
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(target.protocolVersion)
+            ?: ProtocolConstants.VERSION_V1
+
         val requestMessage = ProtocolMessage(
+            version = negotiatedVersion,
             type = ProtocolMessageType.TRANSFER_REQUEST,
             senderId = myId,
             receiverId = target.id,
@@ -608,9 +661,13 @@ class TransferManager(
                 "sessionId" to sessionId,
                 "senderName" to settings.deviceName,
                 "senderPlatform" to "android",
+                "senderType" to "android",
                 "senderIp" to myIp,
                 "senderPort" to settings.port,
                 "totalBytes" to totalBytes,
+                "totalSize" to totalBytes,
+                "fileCount" to metadataList.size,
+                "tlsPreferred" to settings.tlsPreferred,
                 "supportsResume" to true,
                 "files" to FileMetadata.toJsonArray(metadataList)
             )
@@ -622,7 +679,14 @@ class TransferManager(
         val asyncDeferred = CompletableDeferred<ProtocolMessage>()
         pendingOutgoingApprovals[sessionId] = asyncDeferred
 
-        val result = client.sendMessage(target.ipAddress, target.port, requestMessage, timeoutMs = approvalTimeoutMs)
+        val result = client.sendMessage(
+            host = target.ipAddress,
+            port = target.port,
+            message = requestMessage,
+            timeoutMs = approvalTimeoutMs,
+            useTls = useTls,
+            expectedCertFingerprint = expectedFingerprint
+        )
 
         val resolvedResult: Result<ProtocolMessage> = if (result.isSuccess) {
             pendingOutgoingApprovals.remove(sessionId)
@@ -712,17 +776,36 @@ class TransferManager(
 
             try {
                 val settings = settingsRepository.settings.value
+                val pairedPeer = try { pairedDeviceRepository.getPairedDevice(target.id) } catch (_: Exception) { null }
+                val useTlsForData = settings.tlsPreferred && (target.tlsSupported || pairedPeer?.tlsSupported == true)
+                val expectedCertFp = target.certFingerprint?.takeIf { it.isNotBlank() }
+                    ?: pairedPeer?.certFingerprint?.takeIf { it.isNotBlank() }
+                val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(target.protocolVersion)
+                    ?: ProtocolConstants.VERSION_V1
+                val requestCompletionAck = negotiatedVersion == ProtocolConstants.VERSION_V2
+
                 val fileStartTime = System.currentTimeMillis()
                 activeTransferPeers[transferId] = target.ipAddress to target.port
 
                 if (meta.isDirectory) {
                     var dirSocket: Socket? = null
                     try {
-                        dirSocket = Socket().apply {
+                        val plainDirSocket = Socket().apply {
                             connect(InetSocketAddress(target.ipAddress, target.port), settings.connectionTimeoutMs)
                             soTimeout = settings.connectionTimeoutMs
                         }
+                        dirSocket = if (useTlsForData) {
+                            TlsTransport.upgradeClientSocketToTls(
+                                plainSocket = plainDirSocket,
+                                host = target.ipAddress,
+                                port = target.port,
+                                expectedFingerprintSha256 = expectedCertFp
+                            )
+                        } else {
+                            plainDirSocket
+                        }
                         val out = BufferedOutputStream(dirSocket.getOutputStream())
+                        val dirInput = BufferedInputStream(dirSocket.getInputStream())
                         val dirPayload = mutableMapOf<String, Any>(
                             "sessionId" to sessionId,
                             "fileId" to meta.fileId,
@@ -731,18 +814,29 @@ class TransferManager(
                             "fileSize" to 0L,
                             "mimeType" to meta.mimeType,
                             "senderName" to settings.deviceName,
-                            "isDirectory" to true
+                            "isDirectory" to true,
+                            "expectCompletionAck" to requestCompletionAck
                         )
                         meta.relativePath?.let { dirPayload["relativePath"] = it }
                         MessageFraming.writeFrame(
                             out,
                             ProtocolMessage(
+                                version = negotiatedVersion,
                                 type = ProtocolMessageType.TRANSFER_STARTED,
                                 senderId = myId,
                                 receiverId = target.id,
                                 payload = dirPayload
                             )
                         )
+                        if (requestCompletionAck) {
+                            val ack = try { MessageFraming.readFrame(dirInput) } catch (_: Exception) { null }
+                            if (ack?.type == ProtocolMessageType.TRANSFER_FAILED || ack?.type == ProtocolMessageType.ERROR) {
+                                val reason = ack.payload["reason"] as? String
+                                    ?: ack.payload["message"] as? String
+                                    ?: "Remote peer failed creating directory"
+                                throw IllegalStateException(reason)
+                            }
+                        }
                         recordTransferCompleted(
                             id = transferId,
                             sessionId = sessionId,
@@ -765,19 +859,30 @@ class TransferManager(
                 }
 
                 updateTransferItem(transferId) {
-                    it.copy(status = TransferStatus.ACTIVE, isPaused = false, speed = "Connecting…")
+                    it.copy(status = TransferStatus.ACTIVE, isPaused = false, speed = "Connecting…", etaSeconds = null)
                 }
 
                 var socket: Socket? = null
                 try {
                     FileTransferService.start(context)
-                    socket = Socket().apply {
+                    val plainSocket = Socket().apply {
                         connect(InetSocketAddress(target.ipAddress, target.port), settings.connectionTimeoutMs)
                         soTimeout = maxOf(settings.connectionTimeoutMs, 120_000)
+                    }
+                    socket = if (useTlsForData) {
+                        TlsTransport.upgradeClientSocketToTls(
+                            plainSocket = plainSocket,
+                            host = target.ipAddress,
+                            port = target.port,
+                            expectedFingerprintSha256 = expectedCertFp
+                        )
+                    } else {
+                        plainSocket
                     }
                     performanceMonitor?.onSocketOpened()
                     activeTransferSockets[transferId] = socket
                     val output = BufferedOutputStream(socket.getOutputStream())
+                    val streamInput = BufferedInputStream(socket.getInputStream())
 
                     val payloadMap = mutableMapOf<String, Any>(
                         "sessionId" to sessionId,
@@ -786,7 +891,8 @@ class TransferManager(
                         "fileName" to meta.fileName,
                         "fileSize" to meta.fileSize,
                         "mimeType" to meta.mimeType,
-                        "senderName" to settings.deviceName
+                        "senderName" to settings.deviceName,
+                        "expectCompletionAck" to requestCompletionAck
                     )
                     if (peerSupportsResume) {
                         payloadMap["supportsResume"] = true
@@ -796,6 +902,7 @@ class TransferManager(
                         payloadMap["relativePath"] = meta.relativePath
                     }
                     val startMsg = ProtocolMessage(
+                        version = negotiatedVersion,
                         type = ProtocolMessageType.TRANSFER_STARTED,
                         senderId = myId,
                         receiverId = target.id,
@@ -806,8 +913,7 @@ class TransferManager(
                     var resumeOffset = 0L
                     var expectedPrefixSha: String? = null
                     if (peerSupportsResume) {
-                        val readyInput = BufferedInputStream(socket.getInputStream())
-                        val readyFrame = MessageFraming.readFrame(readyInput)
+                        val readyFrame = MessageFraming.readFrame(streamInput)
                         if (readyFrame?.type == ProtocolMessageType.TRANSFER_READY) {
                             val offeredOffset = (readyFrame.payload["acceptedOffset"] as? Number)?.toLong() ?: 0L
                             val peerPrefix = readyFrame.payload["prefixSha256"] as? String
@@ -831,6 +937,32 @@ class TransferManager(
                         startOffset = resumeOffset,
                         verifiedPrefixSha256 = expectedPrefixSha
                     )
+
+                    if (requestCompletionAck) {
+                        try {
+                            socket.soTimeout = 10_000
+                        } catch (_: Exception) {}
+                        while (true) {
+                            val ackFrame = try {
+                                MessageFraming.readFrame(streamInput)
+                            } catch (_: SocketTimeoutException) {
+                                null
+                            }
+                            if (ackFrame == null) break
+                            when (ackFrame.type) {
+                                ProtocolMessageType.FILE_CONFLICT -> continue
+                                ProtocolMessageType.TRANSFER_COMPLETED -> break
+                                ProtocolMessageType.TRANSFER_FAILED,
+                                ProtocolMessageType.ERROR -> {
+                                    val reason = (ackFrame.payload["reason"] as? String)
+                                        ?: (ackFrame.payload["message"] as? String)
+                                        ?: "Remote peer reported transfer verification failure"
+                                    throw IllegalStateException(reason)
+                                }
+                                else -> break
+                            }
+                        }
+                    }
 
                     if (existingTransferIdMode) {
                         performanceMonitor?.recordRecoveryAttempt(true)
@@ -1019,7 +1151,7 @@ class TransferManager(
             while (isActive) {
                 while (transferPauseFlags[transferId] == true && isActive) {
                     updateTransferItem(transferId) {
-                        it.copy(status = TransferStatus.PENDING, isPaused = true, speed = "Paused")
+                        it.copy(status = TransferStatus.PENDING, isPaused = true, speed = "Paused", etaSeconds = null)
                     }
                     delay(400)
                 }
@@ -1046,6 +1178,9 @@ class TransferManager(
                     }
                     performanceMonitor?.recordMeasuredSendSpeed(speedBytesPerSec)
                     val currentSpeedStr = "${TransferItem.formatBytes(speedBytesPerSec)}/s"
+                    val etaSec = if (speedBytesPerSec > 0L && fileSize > totalRead) {
+                        ((fileSize - totalRead) / speedBytesPerSec).coerceAtLeast(1L)
+                    } else null
 
                     lastSpeedCalcTime = now
                     lastBytesRead = totalRead
@@ -1057,7 +1192,8 @@ class TransferManager(
                             bytesTransferred = totalRead,
                             speed = currentSpeedStr,
                             status = TransferStatus.ACTIVE,
-                            isPaused = false
+                            isPaused = false,
+                            etaSeconds = etaSec
                         )
                     }
 
@@ -1090,12 +1226,23 @@ class TransferManager(
 
     private suspend fun handleIncomingTransferRequest(message: ProtocolMessage, socket: Socket): ProtocolMessage? {
         val payload = message.payload
+        val negotiatedVersion = ProtocolConstants.negotiateProtocolVersion(message.version)
+            ?: ProtocolConstants.VERSION_V1
         val sessionId = payload["sessionId"] as? String ?: UUID.randomUUID().toString()
         val senderName = payload["senderName"] as? String ?: "Remote Device"
-        val senderPlatform = payload["senderPlatform"] as? String ?: "unknown"
-        val senderIp = payload["senderIp"] as? String ?: socket.inetAddress?.hostAddress ?: "127.0.0.1"
-        val senderPort = (payload["senderPort"] as? Number)?.toInt() ?: 53317
-        val totalBytes = (payload["totalBytes"] as? Number)?.toLong() ?: 0L
+        val senderPlatform = (payload["senderPlatform"] as? String)
+            ?: (payload["senderType"] as? String)
+            ?: "unknown"
+        val senderIp = (payload["senderIp"] as? String)
+            ?: (payload["ipAddress"] as? String)
+            ?: socket.inetAddress?.hostAddress
+            ?: "127.0.0.1"
+        val senderPort = (payload["senderPort"] as? Number)?.toInt()
+            ?: (payload["port"] as? Number)?.toInt()
+            ?: ProtocolConstants.DEFAULT_PORT
+        val totalBytes = (payload["totalBytes"] as? Number)?.toLong()
+            ?: (payload["totalSize"] as? Number)?.toLong()
+            ?: 0L
 
         val filesArray = payload["files"] as? JSONArray
         val files = FileMetadata.fromJsonList(filesArray)
@@ -1103,11 +1250,13 @@ class TransferManager(
 
         if (!SecurityValidator.isFileSizeAllowed(totalBytes, settings.maxAcceptedFileSizeMb)) {
             return ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.TRANSFER_REJECTED,
                 senderId = myDeviceIdProvider(),
                 receiverId = message.senderId,
                 payload = mapOf(
                     "sessionId" to sessionId,
+                    "code" to ProtocolConstants.ErrorCode.ERR_FILE_TOO_LARGE,
                     "reason" to "Transfer exceeds maximum accepted file size limit (${settings.maxAcceptedFileSizeMb} MB)"
                 )
             )
@@ -1115,11 +1264,13 @@ class TransferManager(
 
         if (!storageManager.hasAvailableStorage(totalBytes)) {
             return ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.TRANSFER_REJECTED,
                 senderId = myDeviceIdProvider(),
                 receiverId = message.senderId,
                 payload = mapOf(
                     "sessionId" to sessionId,
+                    "code" to ProtocolConstants.ErrorCode.ERR_INSUFFICIENT_SPACE,
                     "reason" to "Insufficient storage space on receiving device"
                 )
             )
@@ -1145,13 +1296,15 @@ class TransferManager(
         if (allowAutoAccept) {
             prepareIncomingReceiving(request)
             return ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.TRANSFER_ACCEPTED,
                 senderId = myDeviceIdProvider(),
                 receiverId = message.senderId,
                 payload = mapOf(
                     "sessionId" to sessionId,
                     "accepted" to true,
-                    "supportsResume" to true
+                    "supportsResume" to true,
+                    "tlsSupported" to settings.tlsPreferred
                 )
             )
         }
@@ -1173,11 +1326,13 @@ class TransferManager(
                 approvalDeferred.await()
             }
             decision ?: ProtocolMessage(
+                version = negotiatedVersion,
                 type = ProtocolMessageType.TRANSFER_REJECTED,
                 senderId = myDeviceIdProvider(),
                 receiverId = message.senderId,
                 payload = mapOf(
                     "sessionId" to sessionId,
+                    "code" to ProtocolConstants.ErrorCode.ERR_TRANSFER_REJECTED,
                     "reason" to "Approval request timed out"
                 )
             )
@@ -1192,14 +1347,17 @@ class TransferManager(
         notificationHelper.cancelIncomingRequestNotification()
         prepareIncomingReceiving(request)
 
+        val settings = settingsRepository.settings.value
         val acceptMsg = ProtocolMessage(
+            version = settings.protocolVersion,
             type = ProtocolMessageType.TRANSFER_ACCEPTED,
             senderId = myDeviceIdProvider(),
             receiverId = request.senderId,
             payload = mapOf(
                 "sessionId" to request.sessionId,
                 "accepted" to true,
-                "supportsResume" to true
+                "supportsResume" to true,
+                "tlsSupported" to settings.tlsPreferred
             )
         )
 
@@ -1208,7 +1366,14 @@ class TransferManager(
             deferred.complete(acceptMsg)
         } else {
             scope.launch {
-                client.sendOneWay(request.senderIp, request.senderPort, acceptMsg)
+                val peer = try { pairedDeviceRepository.getPairedDevice(request.senderId) } catch (_: Exception) { null }
+                client.sendOneWay(
+                    host = request.senderIp,
+                    port = request.senderPort,
+                    message = acceptMsg,
+                    useTls = settings.tlsPreferred && (peer?.tlsSupported == true),
+                    expectedCertFingerprint = peer?.certFingerprint
+                )
             }
         }
     }
@@ -1219,12 +1384,15 @@ class TransferManager(
         request.files.forEach { activeTransferPeers.remove(it.fileId) }
         sessionPeerEndpoints.remove(request.sessionId)
 
+        val settings = settingsRepository.settings.value
         val rejectMsg = ProtocolMessage(
+            version = settings.protocolVersion,
             type = ProtocolMessageType.TRANSFER_REJECTED,
             senderId = myDeviceIdProvider(),
             receiverId = request.senderId,
             payload = mapOf(
                 "sessionId" to request.sessionId,
+                "code" to ProtocolConstants.ErrorCode.ERR_TRANSFER_REJECTED,
                 "reason" to reason
             )
         )
@@ -1234,7 +1402,14 @@ class TransferManager(
             deferred.complete(rejectMsg)
         } else {
             scope.launch {
-                client.sendOneWay(request.senderIp, request.senderPort, rejectMsg)
+                val peer = try { pairedDeviceRepository.getPairedDevice(request.senderId) } catch (_: Exception) { null }
+                client.sendOneWay(
+                    host = request.senderIp,
+                    port = request.senderPort,
+                    message = rejectMsg,
+                    useTls = settings.tlsPreferred && (peer?.tlsSupported == true),
+                    expectedCertFingerprint = peer?.certFingerprint
+                )
             }
         }
     }
@@ -1274,6 +1449,17 @@ class TransferManager(
         recalculateStats()
     }
 
+    private fun snapshotDigestHex(digest: MessageDigest, tempFile: File, receivedBytes: Long): String? {
+        return try {
+            val cloned = digest.clone() as MessageDigest
+            FileStreamFraming.bytesToHex(cloned.digest())
+        } catch (_: CloneNotSupportedException) {
+            storageManager.computeFilePrefixSha256(tempFile, receivedBytes)
+        } catch (_: Exception) {
+            storageManager.computeFilePrefixSha256(tempFile, receivedBytes)
+        }
+    }
+
     suspend fun receiveIncomingFileStream(
         socket: Socket,
         fileMetadata: FileMetadata,
@@ -1281,7 +1467,9 @@ class TransferManager(
         sessionId: String,
         existingInputStream: InputStream? = null,
         senderId: String = "",
-        negotiateResumeReady: Boolean = false
+        negotiateResumeReady: Boolean = false,
+        expectCompletionAck: Boolean = false,
+        negotiatedVersion: String = ProtocolConstants.PREFERRED_VERSION
     ) = withContext(Dispatchers.IO) {
         val receiveStartTime = System.currentTimeMillis()
         val settings = settingsRepository.settings.value
@@ -1294,6 +1482,26 @@ class TransferManager(
 
         if (!SecurityValidator.isFileSizeAllowed(fileMetadata.fileSize, settings.maxAcceptedFileSizeMb)) {
             val reason = "File exceeds max size limit (${settings.maxAcceptedFileSizeMb} MB)"
+            if (expectCompletionAck && !socket.isClosed) {
+                try {
+                    val out = BufferedOutputStream(socket.getOutputStream())
+                    MessageFraming.writeFrame(
+                        out,
+                        ProtocolMessage(
+                            version = negotiatedVersion,
+                            type = ProtocolMessageType.TRANSFER_FAILED,
+                            senderId = myDeviceIdProvider(),
+                            receiverId = peerDevice.id,
+                            payload = mapOf(
+                                "sessionId" to sessionId,
+                                "fileId" to fileMetadata.fileId,
+                                "code" to ProtocolConstants.ErrorCode.ERR_FILE_TOO_LARGE,
+                                "reason" to reason
+                            )
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
             recordTransferFailed(
                 id = fileMetadata.fileId,
                 sessionId = sessionId,
@@ -1328,7 +1536,6 @@ class TransferManager(
             ) {
                 val actualPrefixSha = storageManager.computeFilePrefixSha256(tempFile, savedMeta.bytesWritten)
                 if (actualPrefixSha != null && actualPrefixSha.equals(savedMeta.prefixSha256, ignoreCase = true)) {
-                    // Truncate any extra trailing partial bytes beyond savedMeta.bytesWritten
                     if (tempFile.length() > savedMeta.bytesWritten) {
                         java.io.RandomAccessFile(tempFile, "rw").use { raf ->
                             raf.setLength(savedMeta.bytesWritten)
@@ -1352,6 +1559,7 @@ class TransferManager(
             MessageFraming.writeFrame(
                 readyOut,
                 ProtocolMessage(
+                    version = negotiatedVersion,
                     type = ProtocolMessageType.TRANSFER_READY,
                     senderId = myDeviceIdProvider(),
                     receiverId = peerDevice.id,
@@ -1362,7 +1570,6 @@ class TransferManager(
 
         val digest = MessageDigest.getInstance("SHA-256")
         if (acceptedResumeOffset > 0L) {
-            // Seed full-file digest with verified partial bytes already on disk
             val seedBuf = ByteArray(64 * 1024)
             var rem = acceptedResumeOffset
             FileInputStream(tempFile).use { fis ->
@@ -1411,10 +1618,10 @@ class TransferManager(
                         digest.update(frameResult.data, 0, frameResult.length)
                         receivedBytes += frameResult.length
 
-                        // Periodically checkpoint partial resume metadata when resume is supported
+                        // O(1) incremental digest checkpointing every 256 KB
                         if (negotiateResumeReady && (receivedBytes - lastMetaPersistBytes >= 256L * 1024L)) {
                             fileOutputStream.flush()
-                            val currentPrefixSha = storageManager.computeFilePrefixSha256(tempFile, receivedBytes)
+                            val currentPrefixSha = snapshotDigestHex(digest, tempFile, receivedBytes)
                             if (currentPrefixSha != null) {
                                 storageManager.writeResumeMetadata(
                                     ResumeMetadata(
@@ -1440,6 +1647,9 @@ class TransferManager(
                             }
                             performanceMonitor?.recordMeasuredReceiveSpeed(speed)
                             val speedStr = "${TransferItem.formatBytes(speed)}/s"
+                            val etaSec = if (speed > 0L && fileSize > receivedBytes) {
+                                ((fileSize - receivedBytes) / speed).coerceAtLeast(1L)
+                            } else null
                             lastCalcTime = now
                             lastBytes = receivedBytes
 
@@ -1448,7 +1658,8 @@ class TransferManager(
                                 it.copy(
                                     progress = progress,
                                     bytesTransferred = receivedBytes,
-                                    speed = speedStr
+                                    speed = speedStr,
+                                    etaSeconds = etaSec
                                 )
                             }
 
@@ -1497,6 +1708,42 @@ class TransferManager(
                         when (resolution) {
                             is StorageManager.DestinationResolution.Skipped -> {
                                 storageManager.deleteTempAndMetadata(fileMetadata.fileId)
+                                if (expectCompletionAck && !socket.isClosed) {
+                                    try {
+                                        val ackOut = BufferedOutputStream(socket.getOutputStream())
+                                        MessageFraming.writeFrame(
+                                            ackOut,
+                                            ProtocolMessage(
+                                                version = negotiatedVersion,
+                                                type = ProtocolMessageType.FILE_CONFLICT,
+                                                senderId = myDeviceIdProvider(),
+                                                receiverId = peerDevice.id,
+                                                payload = mapOf(
+                                                    "sessionId" to sessionId,
+                                                    "fileId" to fileMetadata.fileId,
+                                                    "requestedFileName" to fileMetadata.fileName,
+                                                    "policyApplied" to "skip"
+                                                )
+                                            )
+                                        )
+                                        MessageFraming.writeFrame(
+                                            ackOut,
+                                            ProtocolMessage(
+                                                version = negotiatedVersion,
+                                                type = ProtocolMessageType.TRANSFER_COMPLETED,
+                                                senderId = myDeviceIdProvider(),
+                                                receiverId = peerDevice.id,
+                                                payload = mapOf(
+                                                    "sessionId" to sessionId,
+                                                    "fileId" to fileMetadata.fileId,
+                                                    "sha256" to calculatedHashHex,
+                                                    "bytesVerified" to receivedBytes,
+                                                    "skipped" to true
+                                                )
+                                            )
+                                        )
+                                    } catch (_: Exception) {}
+                                }
                                 markTransferCancelled(
                                     transferId = fileMetadata.fileId,
                                     peer = peerDevice,
@@ -1516,6 +1763,47 @@ class TransferManager(
                                 ) ?: throw IllegalStateException("Could not save to ${destFile.name}")
 
                                 storageManager.getTempMetaFile(fileMetadata.fileId).delete()
+
+                                if (expectCompletionAck && !socket.isClosed) {
+                                    try {
+                                        val ackOut = BufferedOutputStream(socket.getOutputStream())
+                                        if (destFile.name != fileMetadata.fileName) {
+                                            MessageFraming.writeFrame(
+                                                ackOut,
+                                                ProtocolMessage(
+                                                    version = negotiatedVersion,
+                                                    type = ProtocolMessageType.FILE_CONFLICT,
+                                                    senderId = myDeviceIdProvider(),
+                                                    receiverId = peerDevice.id,
+                                                    payload = mapOf(
+                                                        "sessionId" to sessionId,
+                                                        "fileId" to fileMetadata.fileId,
+                                                        "requestedFileName" to fileMetadata.fileName,
+                                                        "resolvedFileName" to destFile.name,
+                                                        "policyApplied" to effectivePolicy
+                                                    )
+                                                )
+                                            )
+                                        }
+                                        MessageFraming.writeFrame(
+                                            ackOut,
+                                            ProtocolMessage(
+                                                version = negotiatedVersion,
+                                                type = ProtocolMessageType.TRANSFER_COMPLETED,
+                                                senderId = myDeviceIdProvider(),
+                                                receiverId = peerDevice.id,
+                                                payload = mapOf(
+                                                    "sessionId" to sessionId,
+                                                    "fileId" to fileMetadata.fileId,
+                                                    "sha256" to calculatedHashHex,
+                                                    "bytesVerified" to receivedBytes,
+                                                    "finalFileName" to destFile.name,
+                                                    "skipped" to false
+                                                )
+                                            )
+                                        )
+                                    } catch (_: Exception) {}
+                                }
 
                                 recordTransferCompleted(
                                     id = fileMetadata.fileId,
@@ -1563,13 +1851,12 @@ class TransferManager(
             if (isCancelled || isChecksumOrSecurity || !negotiateResumeReady) {
                 storageManager.deleteTempAndMetadata(fileMetadata.fileId)
             } else {
-                // Save checkpoint metadata so peer can resume from verified offset
                 try {
                     fileOutputStream.flush()
                     fileOutputStream.close()
                 } catch (_: Exception) {}
                 val partialSha = if (receivedBytes > 0L) {
-                    storageManager.computeFilePrefixSha256(tempFile, receivedBytes)
+                    snapshotDigestHex(digest, tempFile, receivedBytes)
                 } else null
                 if (partialSha != null) {
                     storageManager.writeResumeMetadata(
@@ -1584,6 +1871,32 @@ class TransferManager(
                         )
                     )
                 }
+            }
+
+            if (expectCompletionAck && !socket.isClosed) {
+                try {
+                    val failCode = when {
+                        e is SecurityException -> ProtocolConstants.ErrorCode.ERR_PATH_UNSAFE
+                        e.message?.contains("checksum", ignoreCase = true) == true -> ProtocolConstants.ErrorCode.ERR_CHECKSUM_MISMATCH
+                        else -> ProtocolConstants.ErrorCode.ERR_TRANSFER_FAILED
+                    }
+                    val out = BufferedOutputStream(socket.getOutputStream())
+                    MessageFraming.writeFrame(
+                        out,
+                        ProtocolMessage(
+                            version = negotiatedVersion,
+                            type = ProtocolMessageType.TRANSFER_FAILED,
+                            senderId = myDeviceIdProvider(),
+                            receiverId = peerDevice.id,
+                            payload = mapOf(
+                                "sessionId" to sessionId,
+                                "fileId" to fileMetadata.fileId,
+                                "code" to failCode,
+                                "reason" to (e.message ?: "Receive failed")
+                            )
+                        )
+                    )
+                } catch (_: Exception) {}
             }
 
             if (isCancelled) {

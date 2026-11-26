@@ -7,13 +7,17 @@ interface NetworkClient {
         host: String,
         port: Int,
         message: ProtocolMessage,
-        timeoutMs: Int = 10_000
+        timeoutMs: Int = 10_000,
+        useTls: Boolean = false,
+        expectedCertFingerprint: String? = null
     ): Result<ProtocolMessage>
 
     suspend fun sendOneWay(
         host: String,
         port: Int,
         message: ProtocolMessage,
-        timeoutMs: Int = 5_000
+        timeoutMs: Int = 5_000,
+        useTls: Boolean = false,
+        expectedCertFingerprint: String? = null
     ): Result<Unit>
 }

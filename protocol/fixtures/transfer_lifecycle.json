@@ -1,0 +1,118 @@
+{
+  "transferRequest": {
+    "version": "v2",
+    "type": "TRANSFER_REQUEST",
+    "messageId": "msg-tx-req-1",
+    "senderId": "tauri-linux-node",
+    "receiverId": "android-pixel9-node",
+    "timestamp": 1731000010000,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "senderName": "Ubuntu Dev Workstation",
+      "senderPlatform": "linux",
+      "senderType": "linux",
+      "senderIp": "192.168.1.105",
+      "senderPort": 53317,
+      "totalSize": 1048576,
+      "totalBytes": 1048576,
+      "fileCount": 2,
+      "supportsResume": true,
+      "tlsPreferred": true,
+      "files": [
+        {
+          "fileId": "file-001",
+          "fileName": "report.pdf",
+          "fileSize": 1048000,
+          "mimeType": "application/pdf",
+          "relativePath": "ProjectDocs/2026/report.pdf"
+        },
+        {
+          "fileId": "file-002",
+          "fileName": "EmptyFolder",
+          "fileSize": 0,
+          "mimeType": "inode/directory",
+          "relativePath": "ProjectDocs/2026/EmptyFolder",
+          "isDirectory": true
+        }
+      ]
+    }
+  },
+  "transferAccepted": {
+    "version": "v2",
+    "type": "TRANSFER_ACCEPTED",
+    "messageId": "msg-tx-acc-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-linux-node",
+    "timestamp": 1731000011000,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "accepted": true,
+      "supportsResume": true,
+      "expectCompletionAck": true
+    }
+  },
+  "transferStarted": {
+    "version": "v2",
+    "type": "TRANSFER_STARTED",
+    "messageId": "msg-tx-start-1",
+    "senderId": "tauri-linux-node",
+    "receiverId": "android-pixel9-node",
+    "timestamp": 1731000011200,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "fileId": "file-001",
+      "fileIndex": 0,
+      "fileName": "report.pdf",
+      "fileSize": 1048000,
+      "mimeType": "application/pdf",
+      "relativePath": "ProjectDocs/2026/report.pdf",
+      "senderName": "Ubuntu Dev Workstation",
+      "supportsResume": true,
+      "expectReady": true,
+      "expectCompletionAck": true
+    }
+  },
+  "transferReady": {
+    "version": "v2",
+    "type": "TRANSFER_READY",
+    "messageId": "msg-tx-ready-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-linux-node",
+    "timestamp": 1731000011250,
+    "payload": {
+      "fileId": "file-001",
+      "acceptedOffset": 262144,
+      "prefixSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "fileConflict": {
+    "version": "v2",
+    "type": "FILE_CONFLICT",
+    "messageId": "msg-tx-conflict-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-linux-node",
+    "timestamp": 1731000015000,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "fileId": "file-001",
+      "fileName": "report.pdf",
+      "policyApplied": "rename",
+      "resolvedFileName": "report (1).pdf"
+    }
+  },
+  "transferCompleted": {
+    "version": "v2",
+    "type": "TRANSFER_COMPLETED",
+    "messageId": "msg-tx-done-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-linux-node",
+    "timestamp": 1731000016000,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "fileId": "file-001",
+      "status": "COMPLETED",
+      "bytesVerified": 1048000,
+      "sha256": "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"
+    }
+  }
+}

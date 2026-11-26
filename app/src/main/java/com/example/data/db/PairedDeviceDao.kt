@@ -39,6 +39,9 @@ interface PairedDeviceDao {
     @Query("UPDATE paired_devices SET ipAddress = :ipAddress, port = :port, lastConnectedAt = :timestamp WHERE id = :id")
     suspend fun updateNetworkEndpoint(id: String, ipAddress: String, port: Int, timestamp: Long)
 
+    @Query("UPDATE paired_devices SET certFingerprint = :certFingerprint, tlsSupported = :tlsSupported WHERE id = :id")
+    suspend fun updateTlsInfo(id: String, certFingerprint: String?, tlsSupported: Boolean)
+
     @Query("DELETE FROM paired_devices")
     suspend fun deleteAll()
 }

@@ -52,6 +52,9 @@ object DiscoveryProtocol {
     const val KEY_PROTOCOL = "protocol"
     const val KEY_FINGERPRINT = "fingerprint"
     const val KEY_PORT = "port"
+    const val KEY_TLS_SUPPORTED = "tlsSupported"
+    const val KEY_CERT_FINGERPRINT = "certFingerprint"
+    const val KEY_SUPPORTS_RESUME = "supportsResume"
 
     val KNOWN_SERVICE_TYPES = listOf(
         "_lsend._tcp",

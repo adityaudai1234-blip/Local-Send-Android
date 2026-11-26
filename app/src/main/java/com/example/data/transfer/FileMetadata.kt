@@ -69,23 +69,42 @@ data class FileMetadata(
             return array
         }
 
-        /**
-         * Security: Sanitizes incoming filenames to prevent path traversal attacks.
-         * Strips directory paths ("../", "..\\", "/", "\") and preserves only the base file name.
-         */
-        fun sanitizeFileName(rawName: String): String {
-            var name = rawName.replace("\\", "/").substringAfterLast('/')
-            name = name.replace("\u0000", "").replace("..", "").trim()
-            if (name.isBlank() || name == "." || name == "..") {
-                name = "file_${System.currentTimeMillis()}"
+        private val WINDOWS_RESERVED_BASENAMES = setOf(
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        )
+
+        private fun sanitizeSegmentPortable(rawSegment: String): String {
+            var seg = rawSegment
+                .replace(Regex("[\\u0000-\\u001F\\u007F]"), "")
+                .replace("..", "")
+                .replace(Regex("[<>:\"/|?*]"), "_")
+                .trim()
+                .trimEnd('.', ' ')
+            if (seg.isEmpty() || seg == "." || seg == "..") return ""
+            val baseName = seg.substringBefore('.')
+            if (baseName.uppercase(java.util.Locale.ROOT) in WINDOWS_RESERVED_BASENAMES) {
+                seg = "_$seg"
             }
-            return name
+            return seg
         }
 
         /**
-         * Security: Sanitizes a relative path for folder-structured transfers.
-         * Rejects traversal segments (".."), drive letters ("C:"), null bytes, and leading slashes.
-         * Returns a normalized POSIX path like "TripPhotos/Day1/photo.jpg" or null if empty/unsafe.
+         * Security & Cross-OS Portability: Sanitizes incoming filenames to prevent path traversal
+         * attacks and normalize Windows/macOS/Linux illegal characters (`<>:"/|?*`, control chars,
+         * trailing dots/spaces, DOS reserved names like `CON`, `NUL`, `COM1`), while preserving UTF-8 Unicode.
+         */
+        fun sanitizeFileName(rawName: String): String {
+            val base = rawName.replace("\\", "/").substringAfterLast('/')
+            val sanitized = sanitizeSegmentPortable(base)
+            return sanitized.ifBlank { "file_${System.currentTimeMillis()}" }
+        }
+
+        /**
+         * Security & Cross-OS Portability: Sanitizes a relative path for folder-structured transfers.
+         * Rejects traversal segments (".."), drive letters ("C:"), null bytes, and leading slashes,
+         * and normalizes each path segment across Windows/macOS/Linux filesystems.
          */
         fun sanitizeRelativePath(rawRelativePath: String?): String? {
             if (rawRelativePath.isNullOrBlank()) return null
@@ -93,17 +112,22 @@ data class FileMetadata(
             val normalized = rawRelativePath.replace("\\", "/").trim().trimStart('/')
             if (normalized.isBlank()) return null
 
-            val segments = normalized.split('/')
+            val rawSegments = normalized.split('/')
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
 
-            if (segments.isEmpty()) return null
-            for (seg in segments) {
-                if (seg == "." || seg == ".." || seg.contains("..") || seg.contains(':')) {
+            if (rawSegments.isEmpty()) return null
+            val cleanSegments = mutableListOf<String>()
+            for ((index, seg) in rawSegments.withIndex()) {
+                val isDrivePrefix = index == 0 && seg.length >= 2 && seg[0].isLetter() && seg[1] == ':'
+                if (seg == "." || seg == ".." || isDrivePrefix) {
                     return null
                 }
+                val cleanSeg = sanitizeSegmentPortable(seg)
+                if (cleanSeg.isBlank()) return null
+                cleanSegments.add(cleanSeg)
             }
-            return segments.joinToString("/")
+            return cleanSegments.joinToString("/")
         }
     }
 }

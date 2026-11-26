@@ -131,8 +131,9 @@ fun PairedDeviceCard(
 
                     Spacer(modifier = Modifier.size(2.dp))
 
+                    val tlsSuffix = if (device.tlsSupported) " • TLS" else ""
                     Text(
-                        text = "${device.deviceType.displayName} • ${device.displaySubtitle}",
+                        text = "${device.deviceType.friendlyPlatformName} • ${device.displaySubtitle}$tlsSuffix",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

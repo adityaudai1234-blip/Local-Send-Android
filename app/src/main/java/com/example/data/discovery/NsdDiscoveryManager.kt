@@ -31,7 +31,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 class NsdDiscoveryManager(
     private val context: Context,
-    private val performanceMonitor: PerformanceMonitor? = null
+    private val performanceMonitor: PerformanceMonitor? = null,
+    private val localCertFingerprintProvider: () -> String? = { null }
 ) {
     companion object {
         private const val TAG = "NsdDiscoveryManager"
@@ -265,6 +266,9 @@ class NsdDiscoveryManager(
                     val txtPort = attributes[DiscoveryProtocol.KEY_PORT]?.toIntOrNull()
                     val resolvedPort = if (txtPort != null && txtPort in 1024..65535) txtPort else resolvedInfo.port
                     val stableId = fingerprint ?: resolvedInfo.serviceName
+                    val certFingerprint = attributes[DiscoveryProtocol.KEY_CERT_FINGERPRINT]?.takeIf { it.isNotBlank() }
+                    val tlsSupported = attributes[DiscoveryProtocol.KEY_TLS_SUPPORTED]?.equals("true", ignoreCase = true) == true ||
+                        certFingerprint != null
 
                     val device = Device(
                         id = stableId,
@@ -278,7 +282,9 @@ class NsdDiscoveryManager(
                         model = model,
                         isSelf = false,
                         status = DeviceStatus.ONLINE,
-                        serviceName = resolvedInfo.serviceName
+                        serviceName = resolvedInfo.serviceName,
+                        tlsSupported = tlsSupported,
+                        certFingerprint = certFingerprint
                     )
 
                     upsertResolvedDevice(resolvedInfo.serviceName, device)
@@ -446,6 +452,12 @@ class NsdDiscoveryManager(
                 setAttribute(DiscoveryProtocol.KEY_PROTOCOL, DiscoveryProtocol.PROTOCOL_VERSION_V2)
                 setAttribute(DiscoveryProtocol.KEY_FINGERPRINT, localFingerprint)
                 setAttribute(DiscoveryProtocol.KEY_PORT, port.toString())
+                setAttribute(DiscoveryProtocol.KEY_SUPPORTS_RESUME, "true")
+                val certFp = localCertFingerprintProvider()
+                setAttribute(DiscoveryProtocol.KEY_TLS_SUPPORTED, (!certFp.isNullOrBlank()).toString())
+                if (!certFp.isNullOrBlank()) {
+                    setAttribute(DiscoveryProtocol.KEY_CERT_FINGERPRINT, certFp)
+                }
             }
 
             val listener = object : NsdManager.RegistrationListener {

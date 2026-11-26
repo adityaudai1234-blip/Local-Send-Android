@@ -2,7 +2,9 @@ package com.example.data.network
 
 import android.util.Log
 import com.example.data.protocol.MessageFraming
+import com.example.data.protocol.ProtocolConstants
 import com.example.data.protocol.ProtocolMessage
+import com.example.data.protocol.UnsupportedProtocolVersionException
 import com.example.data.security.SecurityValidator
 import com.example.util.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +23,9 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
 class TcpServer(
-    private val performanceMonitor: PerformanceMonitor? = null
+    private val performanceMonitor: PerformanceMonitor? = null,
+    private val localNodeIdProvider: () -> String = { "localdrop-server" },
+    private val enableRateLimiting: Boolean = true
 ) : NetworkServer {
 
     companion object {
@@ -42,6 +46,9 @@ class TcpServer(
     private var streamMessageHandler: (suspend (ProtocolMessage, Socket, BufferedInputStream) -> ProtocolMessage?)? = null
 
     private val activeClientSockets = ConcurrentHashMap.newKeySet<Socket>()
+
+    val activeSocketCount: Int
+        get() = activeClientSockets.size
 
     override fun setMessageHandler(handler: suspend (ProtocolMessage, Socket) -> ProtocolMessage?) {
         this.messageHandler = handler
@@ -69,7 +76,7 @@ class TcpServer(
                     try {
                         val clientSocket = server.accept()
                         val remoteIp = clientSocket.inetAddress?.hostAddress ?: "unknown"
-                        if (!SecurityValidator.allowIncomingConnection(remoteIp)) {
+                        if (enableRateLimiting && !SecurityValidator.allowIncomingConnection(remoteIp)) {
                             Log.w(TAG, "Rate limit exceeded from $remoteIp; closing socket")
                             try {
                                 clientSocket.close()
@@ -138,9 +145,47 @@ class TcpServer(
                 }
 
                 while (isActive && !activeSocket.isClosed && activeSocket.isConnected) {
-                    val message = MessageFraming.readFrame(input) ?: break
+                    val message = try {
+                        MessageFraming.readFrame(input) ?: break
+                    } catch (uv: UnsupportedProtocolVersionException) {
+                        try {
+                            MessageFraming.writeFrame(
+                                output,
+                                ProtocolMessage.createError(
+                                    senderId = localNodeIdProvider(),
+                                    errorCode = ProtocolConstants.ErrorCode.ERR_UNSUPPORTED_VERSION,
+                                    errorMessage = uv.message ?: "Unsupported protocol version '${uv.requestedVersion}'",
+                                    supportedVersions = ProtocolConstants.SUPPORTED_VERSIONS_LIST
+                                )
+                            )
+                        } catch (_: Exception) {}
+                        break
+                    } catch (malformed: Exception) {
+                        try {
+                            MessageFraming.writeFrame(
+                                output,
+                                ProtocolMessage.createError(
+                                    senderId = localNodeIdProvider(),
+                                    errorCode = ProtocolConstants.ErrorCode.ERR_INVALID_FRAME,
+                                    errorMessage = malformed.message ?: "Malformed protocol control frame"
+                                )
+                            )
+                        } catch (_: Exception) {}
+                        break
+                    }
+
                     if (message.senderId.isBlank()) {
                         Log.w(TAG, "Rejected malformed protocol frame with blank senderId")
+                        try {
+                            MessageFraming.writeFrame(
+                                output,
+                                ProtocolMessage.createError(
+                                    senderId = localNodeIdProvider(),
+                                    errorCode = ProtocolConstants.ErrorCode.ERR_INVALID_FRAME,
+                                    errorMessage = "Missing or blank senderId"
+                                )
+                            )
+                        } catch (_: Exception) {}
                         break
                     }
                     Log.d(TAG, "Received message type=${message.type} from ${activeSocket.inetAddress?.hostAddress}")

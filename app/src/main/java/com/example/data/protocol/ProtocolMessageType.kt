@@ -23,6 +23,7 @@ enum class ProtocolMessageType {
     TRANSFER_COMPLETED,
     TRANSFER_CANCELLED,
     TRANSFER_FAILED,
+    FILE_CONFLICT,
     ERROR;
 
     companion object {

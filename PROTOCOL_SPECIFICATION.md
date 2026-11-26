@@ -3,6 +3,10 @@
 
 This specification defines the network framing, message formats, pairing handshake, authentication flow, TLS capability negotiation, security controls, and binary chunked streaming file transfer protocol for peer-to-peer communication between Android and Tauri desktop applications.
 
+Canonical machine-readable contract: [`protocol/localdrop-protocol.schema.json`](protocol/localdrop-protocol.schema.json)  
+Golden wire fixtures: [`protocol/fixtures/`](protocol/fixtures/) (`discovery_advertisement.json`, `pairing_and_auth.json`, `transfer_lifecycle.json`, `error_responses.json`)  
+Independent wire reference peer: [`protocol/tests/protocol_reference_peer.mjs`](protocol/tests/protocol_reference_peer.mjs)
+
 ---
 
 ## 1. Discovery & Network Transport
@@ -17,10 +21,12 @@ This specification defines the network framing, message formats, pairing handsha
   * `deviceModel`: Optional hardware descriptor.
   * `fingerprint`: Ephemeral node identifier used for self-filtering and mDNS duplicate pruning.
   * `port`: Advertised service listening port (`1024..65535`).
+  * `tlsSupported`: Optional `"true"`/`"false"` capability flag (`v2`).
+  * `certFingerprint`: Optional SHA-256 hex digest of peer EC P-256 certificate (`v2`).
 * **Control Channel (Length-Prefixed JSON)**:
   * Control messages are preceded by a **4-byte Big-Endian signed 32-bit integer** representing the payload byte length $L$.
   * The next $L$ bytes contain UTF-8 encoded JSON.
-  * Maximum control frame size: `2,097,152` bytes (2 MB); frames exceeding bounds, containing empty `senderId`, unsupported protocol `version` (only `"v1"` and `"v2"` accepted), blank `type`, or negative `timestamp` are rejected immediately.
+  * Maximum control frame size: `2,097,152` bytes (2 MB); frames exceeding bounds, containing empty `senderId`, unsupported protocol `version` (only `"v1"` and `"v2"` accepted — unsupported versions elicit `ERR_UNSUPPORTED_VERSION`), blank `type`, or negative `timestamp` are rejected immediately.
 * **Payload Channel (Binary Chunk Streaming)**:
   * Raw file contents are streamed in configurable binary frames (`DEFAULT_CHUNK_SIZE = 65536` bytes / 64 KB default; sender-selectable `32 KB`, `64 KB`, `128 KB`, or `256 KB` buffers; strict receiver frame cap of `512 KB` = `DEFAULT_CHUNK_SIZE * 8` in `FileStreamFraming`) with magic headers so multi-gigabyte files never buffer entirely in RAM.
 
@@ -35,9 +41,10 @@ Length-Prefixed Control Frame:
 
 ## 2. TLS Capability Negotiation (v2)
 
-* Peers advertising `protocolVersion = "v2"` and `tlsPreferred = true` support TLS 1.2 / TLS 1.3 over the same TCP socket.
-* `TcpServer` inspects the initial stream byte (`0x16` = TLS ClientHello record vs length-prefixed JSON) via `TlsTransport.isTlsClientHello(...)` **before** control frame decoding. If an `SSLContext` is configured, it upgrades the socket to `SSLSocket`; if no server certificate KeyStore is configured yet, it closes the socket cleanly with a structured warning rather than misinterpreting TLS ClientHello bytes as a frame length.
-* For local self-signed peer certificates exchanged during QR pairing, trust pinning compares the QR-advertised or mutually paired fingerprint before upgrading the socket (`TlsTransport.createClientSslSocketFactory`).
+* Peers advertising `protocolVersion = "v2"` and `tlsPreferred = true` (`tlsSupported = true`) support TLS 1.2 / TLS 1.3 over the same TCP socket.
+* Each node generates and persists an **EC P-256** self-signed X.509 identity (`TlsTransport.getOrCreateLocalTlsIdentity`) whose SHA-256 certificate digest (`certFingerprint`) is exchanged in mDNS TXT records, QR payloads, and `PAIRING_ACCEPTED` responses.
+* `TcpServer` inspects the initial stream byte (`0x16` = TLS ClientHello record vs length-prefixed JSON) via `TlsTransport.isTlsClientHello(...)` **before** control frame decoding. If an `SSLContext` is configured, it upgrades the socket to `SSLSocket`; if no server certificate KeyStore is configured, it closes the socket cleanly with a structured warning rather than misinterpreting TLS ClientHello bytes as a frame length.
+* For local self-signed peer certificates exchanged during QR pairing, trust pinning compares the QR-advertised or persisted `PairedDevice.certFingerprint` digest before upgrading outgoing control or binary stream sockets (`TlsTransport.upgradeClientSocketToTls`). Mismatched fingerprints abort the TLS handshake immediately.
 * Fallback to `v1` unencrypted local LAN framing only happens when a peer explicitly lacks TLS v2 capability and user policy permits it.
 
 ---
@@ -64,38 +71,48 @@ All control messages share this JSON structure:
 
 ## 4. Message Types & Error Codes
 
-### 4.1 Pairing & Auth Messages (Phase 2)
-* `PAIRING_REQUEST`: Sent with temporary QR token (`120s` default TTL) and session ID. Never contains Keystore permanent keys.
-* `PAIRING_ACCEPTED`: Returns mutual permanent authentication token stored encrypted in Android Keystore / Desktop keychain.
-* `PAIRING_REJECTED`: Returns rejection reason if token/session invalid or expired.
-* `AUTHENTICATION_REQUEST`: Proves identity using stored mutual token.
-* `AUTHENTICATION_RESPONSE`: Acknowledges successful authentication.
+### 4.1 Pairing & Auth Messages (Phase 2 & 9)
+* **QR Pairing Formats**: Both structured JSON payloads and deep-link URIs (`localdrop://pair?v=v2&sid=...&tok=...&id=...&name=...&plat=...&ip=...&port=...&exp=...&tls=1&fp=...`) are supported across `PairingPayload.fromRawInput`.
+* `PAIRING_REQUEST`: Sent with temporary QR token (`120s` default TTL) and single-use `sessionId`. Replaying a consumed `sessionId` returns `PAIRING_REJECTED` with `ERR_PAIRING_REPLAY`.
+* `PAIRING_ACCEPTED`: Returns mutual permanent authentication token plus `protocolVersion`, `tlsSupported`, and `certFingerprint` for TLS pinning.
+* `PAIRING_REJECTED`: Returns rejection reason (`ERR_PAIRING_REPLAY`, `ERR_PAIRING_EXPIRED`, `ERR_AUTH_FAILED`) if token/session is invalid, reused, or expired.
+* `AUTHENTICATION_REQUEST`: Proves identity using stored mutual token plus unique `nonce` and millisecond `timestamp` (validated within a ±5 minute skew window to block replays).
+* `AUTHENTICATION_RESPONSE`: Acknowledges successful authentication (`status: "authenticated"`, `protocolVersion`).
 * `HEARTBEAT`: Ping/pong keepalive packet.
 * `ERROR`: Returns structured error code and human-readable description.
 
-### 4.2 File Transfer Messages (Phase 3, 4, 5 & 6)
-* `TRANSFER_REQUEST`: Sender initiates session with `sessionId`, `files[]` (`fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`), `totalSize`, and optional `tlsPreferred`.
-  * `relativePath` (optional UTF-8 POSIX path, e.g., `"TripPhotos/Day1/photo.jpg"`): Enables folder-hierarchy preservation across Android and Tauri desktop peers while remaining 100% optional for legacy v1/v2 flat-file peers.
-* `TRANSFER_ACCEPTED`: Receiver approves the transfer session (returned synchronously on the open request socket within the 60s approval window, or accepted asynchronously over a new socket if dispatched externally).
+### 4.2 File Transfer Messages (Phase 3–9)
+* `TRANSFER_REQUEST`: Sender initiates session with `sessionId`, `files[]` (`fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`, `isDirectory`), `totalBytes` (and legacy alias `totalSize`), `fileCount`, `senderPlatform`/`senderType`, `senderIp`, `senderPort`, and optional `tlsPreferred`. Both `totalBytes` and `totalSize` are accepted on read.
+  * `relativePath` (optional UTF-8 POSIX path, e.g., `"TripPhotos/Day1/photo.jpg"`): Enables folder-hierarchy preservation across Android and Tauri desktop peers while remaining optional for flat-file peers.
+* `TRANSFER_ACCEPTED`: Receiver approves the transfer session (`accepted: true`, `supportsResume`, `tlsSupported`, `expectCompletionAck`).
 * `TRANSFER_REJECTED`: Receiver declines (user declined, approval timeout, unknown peer policy, size limit exceeded, or insufficient disk space).
-* `TRANSFER_STARTED`: Sender announces start of a specific file stream on socket (`sessionId`, `fileId`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`, `senderName`).
-* `TRANSFER_PROGRESS`: Optional progress notification.
+* `TRANSFER_STARTED`: Sender announces start of a file or directory stream on socket (`sessionId`, `fileId`, `fileIndex`, `fileName`, `fileSize`, `mimeType`, optional `relativePath`, `senderName`, `supportsResume`, `expectReady`, `expectCompletionAck`).
+* `TRANSFER_READY`: Receiver confirms resume offset (`acceptedOffset`, optional `prefixSha256`) computed from O(1) incremental SHA-256 checkpoint snapshots.
+* `FILE_CONFLICT`: Optional control notification emitted when a duplicate destination filename collision (`skip` or `rename`) triggers policy resolution (`requestedFileName`, `resolvedFileName`, `policyApplied`).
+* `TRANSFER_PROGRESS`: Optional progress notification (`bytesTransferred`, `totalBytes`, `speedBytesPerSec`, `etaSeconds`).
 * `TRANSFER_PAUSED`: Notifies peer that transfer was paused.
 * `TRANSFER_RESUMED`: Notifies peer that transfer was resumed.
 * `TRANSFER_CANCELLED`: Informs peer that transfer was aborted (`CANCELLED` status persisted cleanly).
-* `TRANSFER_COMPLETED`: Handshake acknowledging successful transfer and SHA-256 verification.
+* `TRANSFER_COMPLETED`: Receiver ACK confirming SHA-256 EOF verification and disk commit (`sha256`, `bytesVerified`, `finalFileName`, `skipped`), sent when `expectCompletionAck = true` (`v2`).
+* `TRANSFER_FAILED`: Receiver failure ACK (`code`, `reason`) when EOF SHA-256 mismatch, path safety violation, or disk write failure occurs (`expectCompletionAck = true`).
 
 ### 4.3 Standard Error Codes
 | Code | Meaning | Receiver / Sender Action |
 |---|---|---|
 | `ERR_INVALID_FRAME` | Malformed header, oversized frame, or blank `senderId` | Close socket immediately |
+| `ERR_UNSUPPORTED_VERSION` | Control envelope `version` outside supported `["v1", "v2"]` | Return `ERROR` with `supportedVersions` & close |
 | `ERR_RATE_LIMITED` | >30 socket requests in 10 seconds from single IP | Drop incoming connection |
 | `ERR_AUTH_LOCKOUT` | 5 failed pairing/auth attempts within 60 seconds | Reject auth for lockout window |
-| `ERR_TOKEN_EXPIRED` | QR pairing session timestamp expired | Prompt user to regenerate QR |
-| `ERR_FILE_TOO_LARGE` | File size exceeds receiver `maxAcceptedFileSizeMb` limit | Reject with `TRANSFER_REJECTED` |
+| `ERR_AUTH_FAILED` | Mutual auth token or QR pairing token mismatch | Increment failure counter, reject |
+| `ERR_TOKEN_EXPIRED` / `ERR_PAIRING_EXPIRED` | QR pairing session timestamp expired | Prompt user to regenerate QR |
+| `ERR_PAIRING_REPLAY` | Single-use QR `sessionId` already consumed | Reject with `PAIRING_REJECTED` |
+| `ERR_REPLAY_DETECTED` | Auth `nonce` reused or timestamp outside ±5 min window | Reject with `ERROR` |
+| `ERR_FILE_TOO_LARGE` | File size exceeds receiver `maxAcceptedFileSizeMb` limit | Reject with `TRANSFER_REJECTED` or `TRANSFER_FAILED` |
 | `ERR_INSUFFICIENT_SPACE` | Free storage below file size + 50 MB safety buffer | Reject with `TRANSFER_REJECTED` |
-| `ERR_CHECKSUM_MISMATCH` | SHA-256 digest mismatch at EOF | Delete temp `.tmp` file, mark `FAILED` |
+| `ERR_FILE_CONFLICT` | File destination conflict encountered | Apply policy / emit `FILE_CONFLICT` |
+| `ERR_CHECKSUM_MISMATCH` | SHA-256 digest mismatch at EOF | Delete temp `.tmp` file, return `TRANSFER_FAILED`, mark `FAILED` |
 | `ERR_PATH_UNSAFE` | Canonical path escape detected | Abort write, raise security warning |
+| `ERR_TRANSFER_FAILED` | Unrecoverable stream I/O or commit failure | Clean up `.tmp`, return `TRANSFER_FAILED` |
 
 ---
 
@@ -173,14 +190,16 @@ Magic: `0x4C53454F` (ASCII `"LSEO"` = LocalSend End Of file)
 
 ## 8. Tauri Desktop (Rust) Reference Compatibility
 
-Tauri desktop peers implementing `CHUNK_MAGIC = 0x4C534431`, `EOF_MAGIC = 0x4C53454F`, 4-byte BE length-prefixed UTF-8 JSON control envelopes, and `_lsend._tcp.` mDNS registration on port `53317` interoperate directly with Android v2. Tauri peers should populate `version: "v2"` when supporting TLS, include optional sanitized `relativePath` entries inside `FileMetadata` for folder transfers, respect the 512 KB max binary chunk length, and gracefully handle `version: "v1"` frames for backward compatibility.
+Tauri desktop peers implementing `CHUNK_MAGIC = 0x4C534431`, `EOF_MAGIC = 0x4C53454F`, 4-byte BE length-prefixed UTF-8 JSON control envelopes, EC P-256 TLS pinning, and `_lsend._tcp.` mDNS registration on port `53317` interoperate directly with Android v2. Tauri peers should populate `version: "v2"` when supporting TLS, include optional sanitized `relativePath` entries inside `FileMetadata` for folder transfers, sanitize Windows/macOS/Linux reserved characters (`<>:"/|?*`, trailing dots/spaces, DOS reserved names), apply case-insensitive sibling collision resolution, respect the 512 KB max binary chunk length, and gracefully handle `version: "v1"` frames for backward compatibility.
 
-### Optional Phase 8 Backward-Compatible Extensions (v2+)
+### Optional Phase 8/9 Backward-Compatible Extensions (v2+)
 
 * **Verified-Offset Resume Handshake**:
   * A sender supporting verified resume sets `"supportsResume": true` and `"expectReady": true` on `TRANSFER_STARTED`.
   * Legacy v1/v2 receivers that ignore unknown JSON fields simply proceed from byte offset `0`.
-  * Updated receivers inspect `.tmp` + sidecar `.meta.json`, compute a SHA-256 prefix hash up to `acceptedOffset`, and reply with `TRANSFER_READY` containing `acceptedOffset` and `prefixSha256`.
+  * Updated receivers inspect `.tmp` + sidecar `.meta.json` (updated in O(1) via incremental `MessageDigest.clone()` snapshots every 256 KB), return `TRANSFER_READY` with `acceptedOffset` and `prefixSha256`.
   * Senders verify the local file prefix SHA-256 against `prefixSha256`; on mismatch or missing match, transmission cleanly falls back to offset `0`.
+* **Completion ACK & Conflict Handshake (`expectCompletionAck`)**:
+  * When a `v2` sender sets `"expectCompletionAck": true` on `TRANSFER_STARTED`, receivers keep the data socket open after reading `"LSEO"` until verification finishes, emitting optional `FILE_CONFLICT` followed by `TRANSFER_COMPLETED` (or `TRANSFER_FAILED`).
 * **Empty Folder Markers**:
   * `FileMetadata.isDirectory: true` with `fileSize = 0` and sanitized `relativePath` instructs receiving peers to create empty subdirectories (`mkdirs()`) without allocating a file or expecting `CHUNK`/`EOF` frames.

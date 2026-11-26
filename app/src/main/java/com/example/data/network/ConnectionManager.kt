@@ -48,7 +48,8 @@ class ConnectionManager(
     private val myDeviceIdProvider: () -> String,
     private val context: Context? = null,
     private val pairedDeviceRepository: PairedDeviceRepository? = null,
-    private val performanceMonitor: PerformanceMonitor? = null
+    private val performanceMonitor: PerformanceMonitor? = null,
+    private val tlsPreferredProvider: () -> Boolean = { true }
 ) {
     companion object {
         private const val TAG = "ConnectionManager"
@@ -144,18 +145,28 @@ class ConnectionManager(
             val startMs = System.currentTimeMillis()
             val myId = myDeviceIdProvider()
 
+            val nonce = UUID.randomUUID().toString()
             val authMessage = ProtocolMessage(
                 type = ProtocolMessageType.AUTHENTICATION_REQUEST,
                 senderId = myId,
                 receiverId = device.id,
                 payload = mapOf(
                     "token" to (authToken ?: ""),
-                    "timestamp" to System.currentTimeMillis()
+                    "timestamp" to System.currentTimeMillis(),
+                    "nonce" to nonce
                 )
             )
 
             setConnectionState(device.id, ConnectionState.Authenticating)
-            val result = client.sendMessage(device.ipAddress, device.port, authMessage, timeoutMs = 8_000)
+            val useTls = tlsPreferredProvider() && device.tlsSupported
+            val result = client.sendMessage(
+                host = device.ipAddress,
+                port = device.port,
+                message = authMessage,
+                timeoutMs = 8_000,
+                useTls = useTls,
+                expectedCertFingerprint = device.certFingerprint
+            )
 
             result.fold(
                 onSuccess = { response ->
@@ -209,7 +220,13 @@ class ConnectionManager(
                     senderId = myDeviceIdProvider(),
                     receiverId = deviceId
                 )
-                client.sendOneWay(device.ipAddress, device.port, closeMsg)
+                client.sendOneWay(
+                    host = device.ipAddress,
+                    port = device.port,
+                    message = closeMsg,
+                    useTls = tlsPreferredProvider() && device.tlsSupported,
+                    expectedCertFingerprint = device.certFingerprint
+                )
             }
         }
         setConnectionState(deviceId, ConnectionState.Disconnected)
@@ -218,7 +235,14 @@ class ConnectionManager(
     suspend fun ping(device: PairedDevice): Boolean {
         val start = System.currentTimeMillis()
         val heartbeat = ProtocolMessage.createHeartbeat(myDeviceIdProvider())
-        val result = client.sendMessage(device.ipAddress, device.port, heartbeat, timeoutMs = 4_000)
+        val result = client.sendMessage(
+            host = device.ipAddress,
+            port = device.port,
+            message = heartbeat,
+            timeoutMs = 4_000,
+            useTls = tlsPreferredProvider() && device.tlsSupported,
+            expectedCertFingerprint = device.certFingerprint
+        )
         if (result.isSuccess) {
             val rtt = (System.currentTimeMillis() - start).coerceAtLeast(1L)
             _peerLatenciesMs.update { it + (device.id to rtt) }
@@ -229,7 +253,14 @@ class ConnectionManager(
     suspend fun testPeerLatencyMs(device: PairedDevice): Result<Long> {
         val start = System.currentTimeMillis()
         val heartbeat = ProtocolMessage.createHeartbeat(myDeviceIdProvider())
-        val result = client.sendMessage(device.ipAddress, device.port, heartbeat, timeoutMs = 4_000)
+        val result = client.sendMessage(
+            host = device.ipAddress,
+            port = device.port,
+            message = heartbeat,
+            timeoutMs = 4_000,
+            useTls = tlsPreferredProvider() && device.tlsSupported,
+            expectedCertFingerprint = device.certFingerprint
+        )
         val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
         return result.fold(
             onSuccess = {
@@ -273,6 +304,9 @@ class ConnectionManager(
                 if (endpointChanged) {
                     pairedDeviceRepository?.updateNetworkEndpoint(paired.id, match.ipAddress, match.port)
                 }
+                if (paired.certFingerprint == null && !match.certFingerprint.isNullOrBlank()) {
+                    pairedDeviceRepository?.updateTlsInfo(paired.id, match.certFingerprint, match.tlsSupported)
+                }
 
                 val currentState = getConnectionState(paired.id)
                 if (paired.id !in userDisconnectedIds &&
@@ -282,7 +316,9 @@ class ConnectionManager(
                 ) {
                     val updatedDevice = paired.copy(
                         ipAddress = match.ipAddress.ifBlank { paired.ipAddress },
-                        port = match.port
+                        port = match.port,
+                        tlsSupported = paired.tlsSupported || match.tlsSupported,
+                        certFingerprint = paired.certFingerprint ?: match.certFingerprint
                     )
                     val token = pairedDeviceRepository?.getAuthToken(paired.id)
                     if (!token.isNullOrBlank()) {

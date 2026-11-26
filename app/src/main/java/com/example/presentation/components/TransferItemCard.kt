@@ -294,9 +294,16 @@ fun TransferItemCard(
                     )
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (item.speed.isNotBlank()) {
+                        val etaText = item.formattedEta
+                        val speedLabel = when {
+                            item.speed.isNotBlank() && etaText != null -> "${item.speed} • $etaText"
+                            item.speed.isNotBlank() -> item.speed
+                            etaText != null -> etaText
+                            else -> ""
+                        }
+                        if (speedLabel.isNotBlank()) {
                             Text(
-                                text = item.speed,
+                                text = speedLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

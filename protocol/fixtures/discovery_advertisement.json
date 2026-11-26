@@ -1,0 +1,66 @@
+{
+  "serviceType": "_lsend._tcp.",
+  "defaultPort": 53317,
+  "samples": [
+    {
+      "platform": "android",
+      "serviceName": "LocalDrop-Pixel9-7a2c",
+      "txt": {
+        "alias": "Pixel 9 Pro",
+        "deviceType": "android",
+        "version": "2.2.0",
+        "deviceModel": "Google Pixel 9 Pro",
+        "protocol": "v2",
+        "fingerprint": "android-ephemeral-7a2c901f",
+        "port": "53317",
+        "tlsSupported": "true",
+        "certFingerprint": "4e1c9d0b2f7a8e315c6d4a2b8f091234567890abcdef1234567890abcdef1234",
+        "supportsResume": "true"
+      }
+    },
+    {
+      "platform": "windows",
+      "serviceName": "LocalDrop-WinPC-91b4",
+      "txt": {
+        "alias": "Workstation Windows",
+        "deviceType": "windows",
+        "version": "2.2.0",
+        "deviceModel": "Windows 11 (Tauri 2)",
+        "protocol": "v2",
+        "fingerprint": "tauri-win-91b4c801",
+        "port": "53317",
+        "tlsSupported": "true",
+        "certFingerprint": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+        "supportsResume": "true"
+      }
+    },
+    {
+      "platform": "macos",
+      "serviceName": "LocalDrop-MacStudio-3e19",
+      "txt": {
+        "alias": "Mac Studio M3",
+        "deviceType": "macos",
+        "version": "2.2.0",
+        "deviceModel": "Mac14,13 (macOS Sequoia)",
+        "protocol": "v1",
+        "fingerprint": "tauri-mac-3e19002a",
+        "port": "53317"
+      }
+    },
+    {
+      "platform": "linux",
+      "serviceName": "LocalDrop-UbuntuBox-55d0",
+      "txt": {
+        "alias": "Ubuntu Dev Workstation",
+        "deviceType": "linux",
+        "version": "2.2.0",
+        "deviceModel": "Ubuntu 24.04 LTS",
+        "protocol": "v2",
+        "fingerprint": "tauri-linux-55d0a123",
+        "port": "53317",
+        "tlsSupported": "true",
+        "supportsResume": "true"
+      }
+    }
+  ]
+}

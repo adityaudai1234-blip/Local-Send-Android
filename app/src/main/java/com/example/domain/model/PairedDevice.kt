@@ -14,7 +14,9 @@ data class PairedDevice(
     val isFavorite: Boolean = false,
     val useCount: Int = 0,
     val lastTransferredAt: Long = 0L,
-    val autoAccept: Boolean = false
+    val autoAccept: Boolean = false,
+    val certFingerprint: String? = null,
+    val tlsSupported: Boolean = false
 ) {
     val displaySubtitle: String
         get() = "$ipAddress:$port"

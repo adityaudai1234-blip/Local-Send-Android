@@ -217,7 +217,7 @@ fun ScanQrDialog(
                                                 if (!isProcessing) {
                                                     val rawText = decodeQrFromImage(imageProxy, reader)
                                                     if (rawText != null) {
-                                                        val payload = PairingPayload.fromJson(rawText)
+                                                        val payload = PairingPayload.fromRawInput(rawText)
                                                         if (payload != null) {
                                                             if (payload.isExpired) {
                                                                 errorMessage = "Scanned QR code has expired!"
@@ -360,7 +360,7 @@ fun ScanQrDialog(
                         }
 
                         Text(
-                            text = "Paste Pairing Payload JSON",
+                            text = "Paste Pairing JSON or localdrop://pair Link",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -371,7 +371,7 @@ fun ScanQrDialog(
                                 manualInputText = it
                                 errorMessage = null
                             },
-                            placeholder = { Text("{\"protocolVersion\":\"v1\",...}") },
+                            placeholder = { Text("{\"protocolVersion\":\"v2\",...} or localdrop://pair?...") },
                             minLines = 3,
                             maxLines = 5,
                             modifier = Modifier
@@ -384,7 +384,7 @@ fun ScanQrDialog(
                         OutlinedButton(
                             onClick = {
                                 val testPayload = PairingPayload(
-                                    protocolVersion = "v1",
+                                    protocolVersion = "v2",
                                     sessionId = java.util.UUID.randomUUID().toString(),
                                     pairingToken = "test_token_847194",
                                     deviceId = "tauri-desktop-${java.util.UUID.randomUUID().toString().take(4)}",
@@ -407,9 +407,9 @@ fun ScanQrDialog(
 
                         Button(
                             onClick = {
-                                val payload = PairingPayload.fromJson(manualInputText)
+                                val payload = PairingPayload.fromRawInput(manualInputText)
                                 if (payload == null) {
-                                    errorMessage = "Invalid JSON or unsupported protocol version."
+                                    errorMessage = "Invalid JSON, pairing URI, or unsupported protocol version."
                                 } else if (payload.isExpired) {
                                     errorMessage = "This pairing token has expired."
                                 } else {

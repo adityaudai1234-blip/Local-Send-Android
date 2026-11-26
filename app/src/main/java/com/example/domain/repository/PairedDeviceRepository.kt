@@ -16,5 +16,6 @@ interface PairedDeviceRepository {
     suspend fun setAutoAccept(id: String, autoAccept: Boolean)
     suspend fun incrementUsage(id: String)
     suspend fun updateNetworkEndpoint(id: String, ipAddress: String, port: Int)
+    suspend fun updateTlsInfo(id: String, certFingerprint: String?, tlsSupported: Boolean) {}
     suspend fun clearAllDevices()
 }

@@ -1,10 +1,16 @@
 package com.example.data.protocol
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+class UnsupportedProtocolVersionException(
+    val requestedVersion: String,
+    message: String = "Unsupported protocol version: $requestedVersion"
+) : IllegalArgumentException(message)
+
 data class ProtocolMessage(
-    val version: String = "v1",
+    val version: String = ProtocolConstants.PREFERRED_VERSION,
     val type: ProtocolMessageType,
     val messageId: String = UUID.randomUUID().toString(),
     val senderId: String,
@@ -23,7 +29,7 @@ data class ProtocolMessage(
 
         val payloadJson = JSONObject()
         for ((key, value) in payload) {
-            payloadJson.put(key, value)
+            payloadJson.put(key, toJsonCompatible(value))
         }
         json.put("payload", payloadJson)
 
@@ -31,7 +37,19 @@ data class ProtocolMessage(
     }
 
     companion object {
-        val SUPPORTED_VERSIONS = setOf("v1", "v2")
+        val SUPPORTED_VERSIONS = ProtocolConstants.SUPPORTED_VERSIONS
+
+        private fun toJsonCompatible(value: Any?): Any {
+            return when (value) {
+                null -> JSONObject.NULL
+                is JSONObject, is JSONArray, is String, is Number, is Boolean -> value
+                is List<*> -> JSONArray().apply { value.forEach { put(toJsonCompatible(it)) } }
+                is Map<*, *> -> JSONObject().apply {
+                    value.forEach { (k, v) -> if (k != null) put(k.toString(), toJsonCompatible(v)) }
+                }
+                else -> value.toString()
+            }
+        }
 
         private fun JSONObject.optNonNullString(key: String, default: String = ""): String {
             if (!has(key) || isNull(key)) return default
@@ -40,9 +58,13 @@ data class ProtocolMessage(
 
         fun fromJsonString(jsonString: String): ProtocolMessage {
             val json = JSONObject(jsonString)
-            val version = json.optNonNullString("version", "v1").ifBlank { "v1" }
+            val version = json.optNonNullString("version", ProtocolConstants.VERSION_V1)
+                .ifBlank { ProtocolConstants.VERSION_V1 }
             if (version !in SUPPORTED_VERSIONS) {
-                throw IllegalArgumentException("Unsupported protocol version: $version")
+                throw UnsupportedProtocolVersionException(
+                    requestedVersion = version,
+                    message = "Unsupported protocol version '$version'. Supported versions: ${ProtocolConstants.SUPPORTED_VERSIONS_LIST.joinToString(", ")}"
+                )
             }
 
             val typeStr = json.optNonNullString("type").trim()
@@ -87,23 +109,35 @@ data class ProtocolMessage(
 
         fun createError(
             senderId: String,
-            receiverId: String,
+            receiverId: String = "",
             errorCode: String,
-            errorMessage: String
+            errorMessage: String,
+            supportedVersions: List<String>? = null,
+            details: String? = null,
+            version: String = ProtocolConstants.PREFERRED_VERSION
         ): ProtocolMessage {
+            val payloadMap = linkedMapOf<String, Any?>(
+                "code" to errorCode,
+                "message" to errorMessage
+            )
+            if (!supportedVersions.isNullOrEmpty()) {
+                payloadMap["supportedVersions"] = supportedVersions
+            }
+            if (!details.isNullOrBlank()) {
+                payloadMap["details"] = details
+            }
             return ProtocolMessage(
+                version = version,
                 type = ProtocolMessageType.ERROR,
                 senderId = senderId,
                 receiverId = receiverId,
-                payload = mapOf(
-                    "code" to errorCode,
-                    "message" to errorMessage
-                )
+                payload = payloadMap
             )
         }
 
-        fun createHeartbeat(senderId: String): ProtocolMessage {
+        fun createHeartbeat(senderId: String, version: String = ProtocolConstants.PREFERRED_VERSION): ProtocolMessage {
             return ProtocolMessage(
+                version = version,
                 type = ProtocolMessageType.HEARTBEAT,
                 senderId = senderId,
                 payload = mapOf("ping" to System.currentTimeMillis())

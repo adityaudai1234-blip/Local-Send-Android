@@ -1,0 +1,53 @@
+{
+  "unsupportedVersion": {
+    "version": "v2",
+    "type": "ERROR",
+    "messageId": "msg-err-ver-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "legacy-peer",
+    "timestamp": 1731000020000,
+    "payload": {
+      "code": "ERR_UNSUPPORTED_VERSION",
+      "message": "Unsupported protocol version 'v99'. Supported versions: v1, v2",
+      "supportedVersions": ["v1", "v2"]
+    }
+  },
+  "authLockout": {
+    "version": "v2",
+    "type": "ERROR",
+    "messageId": "msg-err-lock-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "brute-peer",
+    "timestamp": 1731000021000,
+    "payload": {
+      "code": "ERR_AUTH_LOCKOUT",
+      "message": "Too many failed authentication attempts. Try again later."
+    }
+  },
+  "replayDetected": {
+    "version": "v2",
+    "type": "ERROR",
+    "messageId": "msg-err-replay-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "replay-peer",
+    "timestamp": 1731000022000,
+    "payload": {
+      "code": "ERR_REPLAY_DETECTED",
+      "message": "Authentication request timestamp or nonce was already used or is outside the allowed window."
+    }
+  },
+  "checksumMismatch": {
+    "version": "v2",
+    "type": "TRANSFER_FAILED",
+    "messageId": "msg-err-chk-1",
+    "senderId": "android-pixel9-node",
+    "receiverId": "tauri-win-node-01",
+    "timestamp": 1731000023000,
+    "payload": {
+      "sessionId": "sess-xfer-001",
+      "fileId": "file-001",
+      "code": "ERR_CHECKSUM_MISMATCH",
+      "message": "SHA-256 checksum mismatch! File corrupted during transfer."
+    }
+  }
+}
